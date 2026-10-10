@@ -197,8 +197,24 @@ def resolve_columns(
     return act_col, phase_col, issue_col
 
 
-def read_excel_safe(file_path: str, sheet_name: Optional[str] = None) -> pd.DataFrame:
-    """Excel dosyasını güvenli şekilde okur."""
+def read_excel_safe(file_path: Optional[str] = None, sheet_name: Optional[str] = None) -> pd.DataFrame:
+    """Excel dosyasını güvenli şekilde okur. Belirtilmezse proje klasöründeki Uygunsuzluk.xlsx dosyasını otomatik kullanır."""
+    if not file_path or str(file_path).strip() == "":
+        candidates = ["Uygunsuzluk.xlsx", "ornek_uygunsuzluklar.xlsx"]
+        found = None
+        for c in candidates:
+            if os.path.exists(c):
+                found = os.path.abspath(c)
+                break
+            script_c = os.path.join(os.path.dirname(os.path.abspath(__file__)), c)
+            if os.path.exists(script_c):
+                found = script_c
+                break
+        if found:
+            file_path = found
+        else:
+            raise FileNotFoundError("Excel dosya yolu belirtilmedi ve varsayılan 'Uygunsuzluk.xlsx' dosyası bulunamadı.")
+
     if not os.path.isabs(file_path):
         file_path = os.path.abspath(file_path)
 
@@ -592,20 +608,30 @@ def preview_excel_data(file_path: str, max_rows: int = 5, sheet_name: Optional[s
 # ==============================================================================
 
 try:
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request, Response
+    from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel, Field
 
     web_app = FastAPI(
-        title="Venn Diagram Nonconformity Analysis API",
+        title="Venn Diagram Nonconformity Analysis API & MCP Server",
         description=(
-            "Intranet ortamında Excel verilerini Venn Şeması küme matematiği ile analiz eden REST API.\n\n"
-            "Ağdaki tüm LLM'ler, RAG sistemleri ve web tarayıcıları doğrudan bağlanabilir."
+            "Intranet ortamında Excel verilerini Venn Şeması küme matematiği ile analiz eden REST API & MCP Server.\n\n"
+            "Ağdaki tüm LLM'ler (LibreChat, AnythingLLM, LM Studio, Open-WebUI vb.) ve web tarayıcıları doğrudan bağlanabilir."
         ),
         version="1.2.0"
     )
 
+    # CORS Desteği (Tarayıcı ve web tabanlı LLM Suite istemcileri için zorunlu)
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     class AnalyzeRequest(BaseModel):
-        file_path: str = Field(..., description="Excel dosyasının tam dosya yolu (örn: C:\\...\\Uygunsuzluk.xlsx)")
+        file_path: Optional[str] = Field(None, description="Excel dosyasının yolu (boş bırakılırsa Uygunsuzluk.xlsx kullanılır)")
         compare_by: str = Field("phases", description="'phases' (fazlar arası) veya 'activities' (faaliyetler/iller arası)")
         activity_name: Optional[str] = Field(None, description="Yalnızca belirli bir ili/faaliyeti analiz etmek için (örn: 'kayseri')")
         sheet_name: Optional[str] = Field(None, description="Opsiyonel çalışma sayfası adı")
@@ -616,21 +642,31 @@ try:
     @web_app.get("/")
     def index():
         return {
-            "servis": "Venn Şeması Uygunsuzluk Analiz Servisi (Intranet)",
+            "servis": "Venn Şeması Uygunsuzluk Analiz Servisi & MCP Server (Intranet)",
             "durum": "aktif",
             "ag_erisim_adresi": "http://0.0.0.0:8000",
+            "mcp_http_endpoint": "/mcp",
             "interaktif_swagger_arayuzu": "/docs",
             "endpoints": {
+                "POST /mcp": "LLM Suite Model Context Protocol HTTP Endpoint",
                 "POST /api/analyze": "Venn Şeması küme analizi",
                 "GET /api/activities": "Mevcut faaliyetler ve fazlar",
                 "GET /api/preview": "Excel önizleme"
             }
         }
 
+    @web_app.get("/mcp")
+    def mcp_get_status():
+        return {
+            "status": "ok",
+            "mcp_protocol": "2024-11-05",
+            "message": "MCP HTTP endpoint hazir. JSON-RPC POST istekleri bu adrese gonderilmelidir."
+        }
+
     @web_app.post("/api/analyze")
     def api_analyze(req: AnalyzeRequest):
         return execute_analyze_venn(
-            file_path=req.file_path,
+            file_path=req.file_path or "",
             compare_by=req.compare_by,
             activity_name=req.activity_name,
             sheet_name=req.sheet_name,
@@ -640,21 +676,56 @@ try:
         )
 
     @web_app.get("/api/activities")
-    def api_activities(file_path: str, sheet_name: Optional[str] = None):
-        return execute_list_activities_and_phases(file_path=file_path, sheet_name=sheet_name)
+    def api_activities(file_path: Optional[str] = None, sheet_name: Optional[str] = None):
+        return execute_list_activities_and_phases(file_path=file_path or "", sheet_name=sheet_name)
 
     @web_app.get("/api/preview")
-    def api_preview(file_path: str, max_rows: int = 5, sheet_name: Optional[str] = None):
-        return execute_preview_excel_data(file_path=file_path, max_rows=max_rows, sheet_name=sheet_name)
+    def api_preview(file_path: Optional[str] = None, max_rows: int = 5, sheet_name: Optional[str] = None):
+        return execute_preview_excel_data(file_path=file_path or "", max_rows=max_rows, sheet_name=sheet_name)
 
-    # RAG ve MCP için standart JSON-RPC HTTP Endpoint
-    @web_app.post("/mcp")
-    async def mcp_http_endpoint(payload: Dict[str, Any]):
+    # --------------------------------------------------------------------------
+    # MODEL CONTEXT PROTOCOL (MCP) JSON-RPC 2.0 HTTP İŞLEYİCİSİ
+    # --------------------------------------------------------------------------
+    async def process_single_mcp_jsonrpc(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Tek bir MCP JSON-RPC 2.0 isteğini işler."""
+        if not isinstance(payload, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Invalid Request: Payload must be a JSON object"}
+            }
+
         method = payload.get("method")
-        params = payload.get("params", {})
-        req_id = payload.get("id", 1)
+        params = payload.get("params", {}) or {}
+        has_id = "id" in payload
+        req_id = payload.get("id")
 
-        if method == "tools/list":
+        # 1. MCP Başlatma (Handshake)
+        if method == "initialize":
+            res = {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "resources": {"subscribe": False, "listChanged": False},
+                    "prompts": {"listChanged": False}
+                },
+                "serverInfo": {
+                    "name": "venn-nonconformity-server",
+                    "version": "1.2.0"
+                }
+            }
+            return {"jsonrpc": "2.0", "id": req_id, "result": res}
+
+        # 2. İstemci Bildirimi (Notification - yanıt verilmez)
+        elif method in ["notifications/initialized", "initialized"]:
+            return None if not has_id else {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
+        # 3. Ping / Logging
+        elif method in ["ping", "logging/setLevel"]:
+            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
+        # 4. Araç Listesi Keşfi (tools/list)
+        elif method == "tools/list":
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -662,47 +733,182 @@ try:
                     "tools": [
                         {
                             "name": "analyze_venn_nonconformities",
-                            "description": "Excel'deki uygunsuzlukları Venn şeması ile analiz eder.",
+                            "description": (
+                                "Excel dosyasındaki test aşamalarını (Dry-run, SKT, FKT) veya faaliyetleri/illeri "
+                                "Venn Şeması küme matematiği ile analiz eder. Hangi uygunsuzlukların sadece Dry-run'da "
+                                "olduğunu, hangilerinin SKT ve FKT'de ortak veya kronik tekrarlayan olduğunu hesaplar."
+                            ),
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "file_path": {"type": "string"},
-                                    "compare_by": {"type": "string", "default": "phases"},
-                                    "activity_name": {"type": "string"}
+                                    "compare_by": {
+                                        "type": "string",
+                                        "enum": ["phases", "activities"],
+                                        "default": "phases",
+                                        "description": "'phases' (Dry-run, SKT, FKT arası) veya 'activities' (şehirler/faaliyetler arası)"
+                                    },
+                                    "activity_name": {
+                                        "type": "string",
+                                        "description": "Filtrelenecek faaliyet veya il adı (örn: 'kayseri', 'izmir'). Belirtilmezse tüm dosya analiz edilir."
+                                    },
+                                    "file_path": {
+                                        "type": "string",
+                                        "description": "Excel dosya yolu (boş bırakılırsa sunucudaki Uygunsuzluk.xlsx otomatik kullanılır)"
+                                    }
                                 },
-                                "required": ["file_path"]
+                                "required": []
                             }
                         },
                         {
                             "name": "list_activities_and_phases",
-                            "description": "Faaliyet ve faz listesini keşfeder.",
+                            "description": "Excel dosyasında mevcut olan faaliyet adlarını, illeri, test fazlarını ve kayıt sayılarını listeler.",
                             "inputSchema": {
                                 "type": "object",
-                                "properties": {"file_path": {"type": "string"}},
-                                "required": ["file_path"]
+                                "properties": {
+                                    "file_path": {
+                                        "type": "string",
+                                        "description": "Excel dosya yolu (boş bırakılırsa Uygunsuzluk.xlsx kullanılır)"
+                                    }
+                                },
+                                "required": []
+                            }
+                        },
+                        {
+                            "name": "preview_excel_data",
+                            "description": "Excel dosyasının sütunlarını ve ilk birkaç örnek satırını incelemek için kullanılır.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "file_path": {
+                                        "type": "string",
+                                        "description": "Excel dosya yolu (boş bırakılırsa Uygunsuzluk.xlsx kullanılır)"
+                                    },
+                                    "max_rows": {
+                                        "type": "integer",
+                                        "default": 5,
+                                        "description": "Gösterilecek örnek satır sayısı"
+                                    }
+                                },
+                                "required": []
                             }
                         }
                     ]
                 }
             }
+
+        # 5. Araç Çağrısı (tools/call)
         elif method == "tools/call":
             tool_name = params.get("name")
-            args = params.get("arguments", {})
-            if tool_name == "analyze_venn_nonconformities":
-                res = execute_analyze_venn(**args)
-            elif tool_name == "list_activities_and_phases":
-                res = execute_list_activities_and_phases(**args)
-            elif tool_name == "preview_excel_data":
-                res = execute_preview_excel_data(**args)
-            else:
-                return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Bilinmeyen tool"}}
+            args = params.get("arguments", {}) or {}
+
+            # Varsayılan dosya yolu güvencesi (LLM dosya yolunu belirtmezse Uygunsuzluk.xlsx kullan)
+            if not args.get("file_path"):
+                args["file_path"] = ""
+
+            try:
+                if tool_name in ["analyze_venn_nonconformities", "analyze_venn"]:
+                    res = execute_analyze_venn(**args)
+                elif tool_name in ["list_activities_and_phases", "list_activities"]:
+                    res = execute_list_activities_and_phases(**args)
+                elif tool_name in ["preview_excel_data", "preview_data"]:
+                    res = execute_preview_excel_data(**args)
+                else:
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32601, "message": f"Bilinmeyen MCP aracı: '{tool_name}'"}
+                    }
+
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(res, ensure_ascii=False, indent=2)
+                            }
+                        ],
+                        "isError": res.get("durum") == "hata"
+                    }
+                }
+            except Exception as call_err:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Araç çalıştırma hatası: {str(call_err)}"
+                            }
+                        ],
+                        "isError": True
+                    }
+                }
+
+        # 6. Kaynaklar ve İstemler (Resources / Prompts) Boş Dönüşü
+        elif method == "resources/list":
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": []}}
+
+        elif method == "resources/templates/list":
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"resourceTemplates": []}}
+
+        elif method == "prompts/list":
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": []}}
+
+        # Bilinmeyen metot
+        else:
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}]}
+                "error": {"code": -32601, "message": f"Method '{method}' not found"}
             }
+
+    async def handle_mcp_http_request(request: Request):
+        """MCP HTTP isteklerini (tekil ve toplu) ele alır."""
+        try:
+            body = await request.json()
+        except Exception:
+            body_bytes = await request.body()
+            try:
+                body = json.loads(body_bytes.decode("utf-8"))
+            except Exception as parse_err:
+                return Response(
+                    content=json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": f"JSON parse error: {str(parse_err)}"}
+                    }),
+                    status_code=400,
+                    media_type="application/json"
+                )
+
+        if isinstance(body, list):
+            responses = []
+            for item in body:
+                resp = await process_single_mcp_jsonrpc(item)
+                if resp is not None:
+                    responses.append(resp)
+            return Response(
+                content=json.dumps(responses, ensure_ascii=False),
+                media_type="application/json"
+            )
         else:
-            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+            resp = await process_single_mcp_jsonrpc(body)
+            if resp is None:
+                return Response(status_code=204)
+            return Response(
+                content=json.dumps(resp, ensure_ascii=False),
+                media_type="application/json"
+            )
+
+    @web_app.post("/mcp")
+    @web_app.post("/mcp/")
+    @web_app.post("/v1/mcp")
+    @web_app.post("/")
+    async def mcp_all_post_endpoints(request: Request):
+        return await handle_mcp_http_request(request)
 
 except Exception as import_err:
     web_app = None
