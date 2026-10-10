@@ -1,0 +1,9 @@
+# Intranet MCP Tool Bağımlılıkları (Python 3.10+)
+# İnternetsiz ortamda bu paketlerin .whl dosyaları veya kurum içi PyPI deposu kullanılabilir:
+mcp>=1.2.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+uvicorn>=0.30.0
+starlette>=0.38.0
+sse-starlette>=2.1.0
+pydantic>=2.7.0
