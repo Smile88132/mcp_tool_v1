@@ -22,6 +22,7 @@ REQUIRED_CHECKS = [
     ("starlette", "starlette"),
     ("sse_starlette", "sse-starlette"),
     ("pydantic", "pydantic"),
+    ("fastapi", "fastapi"),
     ("opentelemetry", "opentelemetry-api"),
     ("mcp", "mcp"),
 ]

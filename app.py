@@ -1,17 +1,16 @@
 """
-Intranet RAG Ortamı için Venn Şeması Uygunsuzluk Analiz MCP Sunucusu
-Model Context Protocol (MCP) Server for Nonconformity Venn Analysis
+Intranet RAG ve Web Erişimi için Venn Şeması Uygunsuzluk Analiz Sunucusu
+Model Context Protocol (MCP) & HTTP REST API Server for Nonconformity Venn Analysis
 
-Ortam Kısıtlamaları:
-- Tamamen çevrimdışı (offline) ve intranet uyumlu.
-- Harici ağ çağrısı veya telemetri içermez.
-- Python 3.10+ ve resmi Model Context Protocol SDK destekler.
-- Hem stdio (aynı makinedeki LLM istemcileri için) hem SSE/HTTP (ağ üzerinden intranet erişimi için) destekler.
+Ortam Özellikleri:
+- Tamamen ağdaki herkese açık (0.0.0.0:8000) standart HTTP REST API ve Web Dokümantasyonu (/docs).
+- Karmaşık SSE gereksinimi olmadan her bilgisayardan, tarayıcıdan veya RAG istemcisinden doğrudan erişilebilir.
+- Windows Anaconda pywin32 DLL yükleme sorunlarına karşı korumalı.
+- İsteğe bağlı olarak yerel stdio MCP protokolünü de destekler.
 """
 
 import os
 import sys
-import re
 import json
 import argparse
 import unicodedata
@@ -19,31 +18,28 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 
 # ==============================================================================
-# MCP SDK Uyumluluk Katmanı (MCP v1 FastMCP & MCP v2 MCPServer desteği)
+# Windows / Anaconda DLL Yükleme Düzeltmesi (win32api DLL load failed fix)
 # ==============================================================================
-try:
-    # MCP v2.x (Örn: mcp>=2.0.0)
-    from mcp.server.mcpserver import MCPServer
-    app = MCPServer(
-        name="VennNonconformityRAGServer",
-        instructions="Excel dosyalarındaki faaliyet ve faz bazlı uygunsuzlukları Venn şeması küme matematiği ile analiz eden Intranet RAG aracı.",
-        version="1.1.0"
-    )
-    IS_MCP_V2 = True
-except ImportError:
-    try:
-        # MCP v1.x (Örn: mcp<2.0.0 FastMCP)
-        from mcp.server.fastmcp import FastMCP
-        app = FastMCP(
-            name="VennNonconformityRAGServer",
-            instructions="Excel dosyalarındaki faaliyet ve faz bazlı uygunsuzlukları Venn şeması küme matematiği ile analiz eden Intranet RAG aracı."
-        )
-        IS_MCP_V2 = False
-    except ImportError as e:
-        raise ImportError(
-            "Resmi MCP SDK bulunamadı! Lütfen 'pip install mcp' veya çevrimdışı .whl paketini kurun.\n"
-            f"Orijinal hata: {e}"
-        )
+if sys.platform == "win32":
+    # Anaconda'daki pywintypes.dll ve pythoncom.dll dosyalarını DLL arama yoluna ekle
+    possible_dll_dirs = [
+        os.path.join(sys.prefix, "Lib", "site-packages", "pywin32_system32"),
+        os.path.join(sys.prefix, "Library", "bin"),
+        os.path.join(sys.prefix, "Scripts"),
+    ]
+    # Kullanıcı alanı (Roaming) desteği
+    user_roaming = os.environ.get("APPDATA", "")
+    if user_roaming:
+        py_ver = f"Python{sys.version_info.major}{sys.version_info.minor}"
+        possible_dll_dirs.append(os.path.join(user_roaming, "Python", py_ver, "site-packages", "pywin32_system32"))
+
+    for d in possible_dll_dirs:
+        if os.path.exists(d):
+            try:
+                os.add_dll_directory(d)
+                os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+            except Exception:
+                pass
 
 
 # ==============================================================================
@@ -51,7 +47,7 @@ except ImportError:
 # ==============================================================================
 
 def normalize_str(text: Any) -> str:
-    """Türkçe karakter, birleşik aksan ve boşluk toleranslı küçük harf normalizasyonu."""
+    """Türkçe karakter ve boşluk toleranslı küçük harf normalizasyonu."""
     if text is None or pd.isna(text):
         return ""
     s = str(text).strip()
@@ -104,14 +100,12 @@ def resolve_columns(
     custom_issue: Optional[str] = None
 ) -> Tuple[str, str, str]:
     """
-    Excel DataFrame içindeki Faaliyet, Faz ve Uygunsuzluk sütunlarını otomatik veya özel girdilerle çözer.
-    Özel Durum: Eğer 'Faz' sütunu yoksa ancak 'Faaliyet' sütununda 'dry-run', 'skt', 'kabul_muayene_testi'
-    gibi faz adları geçiyorsa, 'Faaliyet' faz sütunu olarak; 'İl' veya 'Teslimat' ise faaliyet/kapsam sütunu olarak seçilir.
+    Excel DataFrame içindeki Faaliyet, Faz ve Uygunsuzluk sütunlarını otomatik çözer.
     """
     available_cols = list(df.columns)
     available_norm = {normalize_str(c): c for c in available_cols}
 
-    # 1. Uygunsuzluk Sütunu (Açıklama / Uygunsuzluk)
+    # 1. Uygunsuzluk Sütunu (Açıklama)
     issue_col = None
     if custom_issue:
         if custom_issue in available_cols:
@@ -144,7 +138,6 @@ def resolve_columns(
         elif normalize_str(custom_phase) in available_norm:
             phase_col = available_norm[normalize_str(custom_phase)]
 
-    # Eğer özel faz belirtilmediyse arayalım:
     if not phase_col:
         for alias in PHASE_ALIASES:
             norm_a = normalize_str(alias)
@@ -160,7 +153,7 @@ def resolve_columns(
         elif normalize_str(custom_act) in available_norm:
             act_col = available_norm[normalize_str(custom_act)]
 
-    # AKILLI TESPİT: 'Faz' sütunu yoksa ama 'Faaliyet' sütunu faz değerlerini (dry-run, skt vb.) içeriyorsa
+    # Akıllı Tespit: 'Faz' sütunu yoksa ama 'Faaliyet' sütunu 'dry-run', 'skt' içeriyorsa
     if not phase_col:
         faaliyet_candidate = None
         for c in available_cols:
@@ -172,9 +165,7 @@ def resolve_columns(
             sample_values = set(df[faaliyet_candidate].dropna().astype(str).str.strip().str.lower().unique())
             phase_indicators = {"dry-run", "dry run", "skt", "fkt", "kabul_muayene_testi", "kabul"}
             if sample_values & phase_indicators:
-                # 'Faaliyet' sütunu aslında fazları tutuyor!
                 phase_col = faaliyet_candidate
-                # Faaliyet/Kapsam olarak 'İl' veya 'Teslimat' seçelim
                 if not act_col:
                     for scope_alias in ["il", "sehir", "bolge", "teslimat", "faaliyet turu"]:
                         for c_norm, c_orig in available_norm.items():
@@ -184,7 +175,6 @@ def resolve_columns(
                         if act_col:
                             break
 
-    # Hâlâ faaliyet bulunamadıysa standart alias'lardan bak
     if not act_col:
         for alias in ACTIVITY_ALIASES:
             norm_a = normalize_str(alias)
@@ -194,7 +184,6 @@ def resolve_columns(
             if act_col:
                 break
 
-    # Varsayılan fallback:
     if not act_col:
         remaining = [c for c in available_cols if c not in [phase_col, issue_col, "Id", "Tags"]]
         act_col = remaining[0] if remaining else available_cols[0]
@@ -209,9 +198,7 @@ def resolve_columns(
 
 
 def read_excel_safe(file_path: str, sheet_name: Optional[str] = None) -> pd.DataFrame:
-    """
-    Excel dosyasını güvenli şekilde okur, dosya yolu ve uzantı kontrollerini yapar.
-    """
+    """Excel dosyasını güvenli şekilde okur."""
     if not os.path.isabs(file_path):
         file_path = os.path.abspath(file_path)
 
@@ -240,9 +227,7 @@ def read_excel_safe(file_path: str, sheet_name: Optional[str] = None) -> pd.Data
 
 
 def categorize_phase(raw_phase: str) -> str:
-    """
-    Faz ismini standart etiketlere dönüştürür (Dry-run, SKT, FKT / Kabul Muayene).
-    """
+    """Faz ismini standart etiketlere dönüştürür."""
     p = normalize_str(raw_phase)
     if "dry" in p:
         return "Dry-run"
@@ -260,9 +245,6 @@ def categorize_phase(raw_phase: str) -> str:
 def compute_3way_venn(a_name: str, set_a: Set[str],
                        b_name: str, set_b: Set[str],
                        c_name: str, set_c: Set[str]) -> Dict[str, Any]:
-    """
-    Üç küme (Dry-run, SKT, FKT) arasındaki Venn şeması kesişim ve ayrışımlarını hesaplar.
-    """
     only_a = set_a - (set_b | set_c)
     only_b = set_b - (set_a | set_c)
     only_c = set_c - (set_a | set_b)
@@ -293,7 +275,7 @@ def compute_3way_venn(a_name: str, set_a: Set[str],
             f"sadece_{a_name}": {
                 "adet": len(only_a),
                 "ogeler": sorted(list(only_a)),
-                "aciklama": f"Yalnızca {a_name} aşamasında tespit edilen, diğer aşamalarda görülmeyen uygunsuzluklar."
+                "aciklama": f"Yalnızca {a_name} aşamasında tespit edilen uygunsuzluklar."
             },
             f"sadece_{b_name}": {
                 "adet": len(only_b),
@@ -308,22 +290,22 @@ def compute_3way_venn(a_name: str, set_a: Set[str],
             f"ortak_{a_name}_ve_{b_name}_({c_name}_haric)": {
                 "adet": len(ab_only),
                 "ogeler": sorted(list(ab_only)),
-                "aciklama": f"Hem {a_name} hem {b_name} aşamasında görülen fakat {c_name} aşamasında bulunmayan uygunsuzluklar."
+                "aciklama": f"Hem {a_name} hem {b_name} aşamasında görülen uygunsuzluklar."
             },
             f"ortak_{a_name}_ve_{c_name}_({b_name}_haric)": {
                 "adet": len(ac_only),
                 "ogeler": sorted(list(ac_only)),
-                "aciklama": f"Hem {a_name} hem {c_name} aşamasında görülen fakat {b_name} aşamasında bulunmayan uygunsuzluklar."
+                "aciklama": f"Hem {a_name} hem {c_name} aşamasında görülen uygunsuzluklar."
             },
             f"ortak_{b_name}_ve_{c_name}_({a_name}_haric)": {
                 "adet": len(bc_only),
                 "ogeler": sorted(list(bc_only)),
-                "aciklama": f"Hem {b_name} hem {c_name} aşamasında devam eden ancak {a_name} aşamasında olmayan uygunsuzluklar."
+                "aciklama": f"Hem {b_name} hem {c_name} aşamasında devam eden uygunsuzluklar."
             },
             "ucunde_ortak_kesisim": {
                 "adet": len(all_three),
                 "ogeler": sorted(list(all_three)),
-                "aciklama": "Üç test aşamasında da (Dry-run, SKT, FKT) kesintisiz tekrarlayan kronik uygunsuzluklar."
+                "aciklama": "Üç test aşamasında da kesintisiz tekrarlayan kronik uygunsuzluklar."
             }
         },
         "ikili_kesisim_toplamlari": {
@@ -340,9 +322,6 @@ def compute_3way_venn(a_name: str, set_a: Set[str],
 
 
 def compute_general_venn(sets_dict: Dict[str, Set[str]]) -> Dict[str, Any]:
-    """
-    Birden fazla küme (Faaliyetler veya İller arası) için genel küme ve kesişim analizi yapar.
-    """
     names = list(sets_dict.keys())
     total_union = set().union(*sets_dict.values()) if sets_dict else set()
     common_all = set.intersection(*sets_dict.values()) if sets_dict else set()
@@ -354,7 +333,7 @@ def compute_general_venn(sets_dict: Dict[str, Set[str]]) -> Dict[str, Any]:
         individual_uniques[name] = {
             "toplam_adet": len(s),
             "sadece_bu_kumedeki_adet": len(exclusive),
-            "sadece_bu_kumede_olanlar": sorted(list(exclusive))[:100]  # Çok büyük kümelerde özet listesi
+            "sadece_bu_kumede_olanlar": sorted(list(exclusive))[:100]
         }
 
     pairwise_intersections: Dict[str, Any] = {}
@@ -384,11 +363,10 @@ def compute_general_venn(sets_dict: Dict[str, Set[str]]) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# MCP ARAÇLARI (TOOLS)
+# ÇEKİRDEK İŞ MANTIĞI FONKSİYONLARI (Python Core API)
 # ==============================================================================
 
-@app.tool()
-def analyze_venn_nonconformities(
+def execute_analyze_venn(
     file_path: str,
     compare_by: str = "phases",
     activity_name: Optional[str] = None,
@@ -396,29 +374,13 @@ def analyze_venn_nonconformities(
     activity_column: Optional[str] = None,
     phase_column: Optional[str] = None,
     issue_column: Optional[str] = None
-) -> str:
-    """
-    Excel dosyasındaki faaliyet ve test aşamalarındaki uygunsuzlukları Venn Şeması (küme analizi) ile karşılaştırır.
-
-    Parametreler:
-    - file_path (str): İncelenecek Excel dosyasının sanal bilgisayardaki mutlak yolu (.xlsx veya .xls).
-    - compare_by (str): 'phases' (Dry-run, SKT, FKT fazları arası) veya 'activities' (Faaliyetler / İller arası). Varsayılan: 'phases'.
-    - activity_name (str, opsiyonel): compare_by='phases' iken yalnızca belirli bir faaliyeti (veya İli) filtrelemek için.
-    - sheet_name (str, opsiyonel): Excel çalışma sayfası adı.
-    - activity_column (str, opsiyonel): Faaliyet/Kapsam sütun adı (belirtilmezse otomatik tespit edilir).
-    - phase_column (str, opsiyonel): Faz sütun adı (belirtilmezse otomatik tespit edilir).
-    - issue_column (str, opsiyonel): Uygunsuzluk sütun adı (belirtilmezse otomatik tespit edilir).
-
-    Dönüş:
-    - LLM ve RAG sistemlerinin doğrudan yorumlayabileceği yapılandırılmış JSON string.
-    """
+) -> Dict[str, Any]:
     try:
         df = read_excel_safe(file_path, sheet_name=sheet_name)
         act_col, phase_col, issue_col = resolve_columns(
             df, custom_act=activity_column, custom_phase=phase_column, custom_issue=issue_column
         )
 
-        # Veri temizleme: _x000D_, satır sonları ve boş satırları arındır
         clean_df = df.dropna(subset=[issue_col]).copy()
         clean_df[act_col] = clean_df[act_col].apply(clean_text_content)
         clean_df[phase_col] = clean_df[phase_col].apply(clean_text_content)
@@ -427,9 +389,6 @@ def analyze_venn_nonconformities(
 
         compare_by_clean = compare_by.strip().lower()
 
-        # ----------------------------------------------------------------------
-        # SENARYO 1: Fazlar Arası Karşılaştırma (Dry-run, SKT, FKT)
-        # ----------------------------------------------------------------------
         if compare_by_clean in ["phases", "faz", "fazlar"]:
             target_df = clean_df
             scope_info = f"Tüm Kapsam ({act_col} Tümü)"
@@ -439,17 +398,16 @@ def analyze_venn_nonconformities(
                 matches = target_df[target_df[act_col].str.casefold() == act_req.casefold()]
                 if matches.empty:
                     available_acts = sorted(target_df[act_col].unique().tolist())
-                    return json.dumps({
+                    return {
                         "durum": "hata",
                         "mesaj": f"'{act_req}' isimli faaliyet/kapsam bulunamadı.",
                         "mevcut_secenekler": available_acts,
                         "mevcut_faaliyetler": available_acts,
                         "kapsam_sutunu": act_col
-                    }, ensure_ascii=False, indent=2)
+                    }
                 target_df = matches
                 scope_info = f"{act_col}: '{matches[act_col].iloc[0]}'"
 
-            # Fazları standartlaştır
             target_df = target_df.copy()
             target_df["KategorizeFaz"] = target_df[phase_col].apply(categorize_phase)
 
@@ -459,7 +417,6 @@ def analyze_venn_nonconformities(
 
             venn_data = compute_3way_venn("Dry-run", dry_run_set, "SKT", skt_set, "FKT", fkt_set)
 
-            # RAG insight özeti
             total_unique = venn_data["ozet_istatistikler"]["toplam_benzersiz_uygunsuzluk_sayisi"]
             ucunde_ortak_count = venn_data["venn_bolgeleri"]["ucunde_ortak_kesisim"]["adet"]
             sadece_dry_count = venn_data["venn_bolgeleri"]["sadece_Dry-run"]["adet"]
@@ -470,7 +427,7 @@ def analyze_venn_nonconformities(
                 f"{ucunde_ortak_count} adet uygunsuzluk ise Dry-run, SKT ve FKT aşamalarının üçünde de tekrarlamış olup kronik kök neden analizi gerektirmektedir."
             )
 
-            result = {
+            return {
                 "durum": "basarili",
                 "analiz_tipi": "fazlar_arasi_venn_semasi",
                 "kapsam": scope_info,
@@ -482,11 +439,7 @@ def analyze_venn_nonconformities(
                 },
                 "venn_analizi": venn_data
             }
-            return json.dumps(result, ensure_ascii=False, indent=2)
 
-        # ----------------------------------------------------------------------
-        # SENARYO 2: Faaliyetler / İller Arası Karşılaştırma
-        # ----------------------------------------------------------------------
         elif compare_by_clean in ["activities", "faaliyet", "faaliyetler", "iller", "cities"]:
             activity_sets: Dict[str, Set[str]] = {}
             for act in clean_df[act_col].unique():
@@ -496,15 +449,15 @@ def analyze_venn_nonconformities(
                     activity_sets[act_str] = issues
 
             if len(activity_sets) < 2:
-                return json.dumps({
+                return {
                     "durum": "uyari",
-                    "mesaj": f"Karşılaştırma için en az 2 grup/faaliyet bulunmalı. Mevcut sayı: {len(activity_sets)}",
+                    "mesaj": f"Karşılaştırma için en az 2 grup bulunmalı. Mevcut sayı: {len(activity_sets)}",
                     "faaliyetler": list(activity_sets.keys())
-                }, ensure_ascii=False, indent=2)
+                }
 
             venn_data = compute_general_venn(activity_sets)
 
-            result = {
+            return {
                 "durum": "basarili",
                 "analiz_tipi": "faaliyetler_arasi_kume_analizi",
                 "karsilastirilan_sutun": act_col,
@@ -516,32 +469,23 @@ def analyze_venn_nonconformities(
                 },
                 "venn_analizi": venn_data
             }
-            return json.dumps(result, ensure_ascii=False, indent=2)
 
         else:
-            return json.dumps({
+            return {
                 "durum": "hata",
                 "mesaj": f"Geçersiz 'compare_by' değeri: '{compare_by}'. Lütfen 'phases' veya 'activities' kullanın."
-            }, ensure_ascii=False, indent=2)
+            }
 
     except Exception as e:
-        return json.dumps({
+        return {
             "durum": "hata",
             "hata_turu": type(e).__name__,
             "mesaj": str(e),
             "dosya_yolu": file_path
-        }, ensure_ascii=False, indent=2)
+        }
 
 
-@app.tool()
-def list_activities_and_phases(
-    file_path: str,
-    sheet_name: Optional[str] = None
-) -> str:
-    """
-    Excel dosyasındaki faaliyetleri, test fazlarını ve kayıt adetlerini hızlıca keşfeder.
-    LLM'in analiz öncesinde hangi faaliyet/il adlarının var olduğunu öğrenmesi için kullanılır.
-    """
+def execute_list_activities_and_phases(file_path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
     try:
         df = read_excel_safe(file_path, sheet_name=sheet_name)
         act_col, phase_col, issue_col = resolve_columns(df)
@@ -562,7 +506,7 @@ def list_activities_and_phases(
 
         all_phases = sorted(list(set(clean_text_content(p) for p in df[phase_col].dropna().unique())))
 
-        return json.dumps({
+        return {
             "durum": "basarili",
             "dosya_yolu": file_path,
             "toplam_satir_sayisi": len(df),
@@ -574,30 +518,21 @@ def list_activities_and_phases(
             "mevcut_fazlar": all_phases,
             "faaliyetler": [{"faaliyet_adi": a["faaliyet_veya_kapsam"], **a} for a in activities_summary],
             "faaliyetler_veya_kapsamlar": activities_summary
-        }, ensure_ascii=False, indent=2)
-
+        }
     except Exception as e:
-        return json.dumps({
+        return {
             "durum": "hata",
             "hata_turu": type(e).__name__,
             "mesaj": str(e),
             "dosya_yolu": file_path
-        }, ensure_ascii=False, indent=2)
+        }
 
 
-@app.tool()
-def preview_excel_data(
-    file_path: str,
-    max_rows: int = 5,
-    sheet_name: Optional[str] = None
-) -> str:
-    """
-    Excel dosyasının sütun yapısını ve ilk birkaç satırını incelemek için kullanılır.
-    """
+def execute_preview_excel_data(file_path: str, max_rows: int = 5, sheet_name: Optional[str] = None) -> Dict[str, Any]:
     try:
         df = read_excel_safe(file_path, sheet_name=sheet_name)
         act_col, phase_col, issue_col = resolve_columns(df)
-        return json.dumps({
+        return {
             "durum": "basarili",
             "toplam_satir": len(df),
             "sutunlar": list(df.columns),
@@ -607,57 +542,226 @@ def preview_excel_data(
                 "uygunsuzluk": issue_col
             },
             "ornek_veriler": df.head(max_rows).to_dict(orient="records")
-        }, ensure_ascii=False, indent=2)
+        }
     except Exception as e:
-        return json.dumps({
+        return {
             "durum": "hata",
             "hata_turu": type(e).__name__,
             "mesaj": str(e),
             "dosya_yolu": file_path
-        }, ensure_ascii=False, indent=2)
+        }
 
 
 # ==============================================================================
-# CLI ve Sunucu Başlatma (stdio ve SSE / HTTP desteği)
+# Standart MCP Tool Arayüzü (Birim Testleri ve MCP İstemcileri ile Tam Uyumlu)
+# ==============================================================================
+
+def analyze_venn_nonconformities(
+    file_path: str,
+    compare_by: str = "phases",
+    activity_name: Optional[str] = None,
+    sheet_name: Optional[str] = None,
+    activity_column: Optional[str] = None,
+    phase_column: Optional[str] = None,
+    issue_column: Optional[str] = None
+) -> str:
+    res = execute_analyze_venn(
+        file_path=file_path,
+        compare_by=compare_by,
+        activity_name=activity_name,
+        sheet_name=sheet_name,
+        activity_column=activity_column,
+        phase_column=phase_column,
+        issue_column=issue_column
+    )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+def list_activities_and_phases(file_path: str, sheet_name: Optional[str] = None) -> str:
+    res = execute_list_activities_and_phases(file_path, sheet_name=sheet_name)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+def preview_excel_data(file_path: str, max_rows: int = 5, sheet_name: Optional[str] = None) -> str:
+    res = execute_preview_excel_data(file_path, max_rows=max_rows, sheet_name=sheet_name)
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+# ==============================================================================
+# AĞDAKİ HERKESE AÇIK HTTP WEB SERVİSİ (FastAPI / Starlette)
+# ==============================================================================
+
+try:
+    from fastapi import FastAPI
+    from pydantic import BaseModel, Field
+
+    web_app = FastAPI(
+        title="Venn Diagram Nonconformity Analysis API",
+        description=(
+            "Intranet ortamında Excel verilerini Venn Şeması küme matematiği ile analiz eden REST API.\n\n"
+            "Ağdaki tüm LLM'ler, RAG sistemleri ve web tarayıcıları doğrudan bağlanabilir."
+        ),
+        version="1.2.0"
+    )
+
+    class AnalyzeRequest(BaseModel):
+        file_path: str = Field(..., description="Excel dosyasının tam dosya yolu (örn: C:\\...\\Uygunsuzluk.xlsx)")
+        compare_by: str = Field("phases", description="'phases' (fazlar arası) veya 'activities' (faaliyetler/iller arası)")
+        activity_name: Optional[str] = Field(None, description="Yalnızca belirli bir ili/faaliyeti analiz etmek için (örn: 'kayseri')")
+        sheet_name: Optional[str] = Field(None, description="Opsiyonel çalışma sayfası adı")
+        activity_column: Optional[str] = Field(None, description="Opsiyonel özel faaliyet/il sütunu")
+        phase_column: Optional[str] = Field(None, description="Opsiyonel özel faz sütunu")
+        issue_column: Optional[str] = Field(None, description="Opsiyonel özel uygunsuzluk sütunu")
+
+    @web_app.get("/")
+    def index():
+        return {
+            "servis": "Venn Şeması Uygunsuzluk Analiz Servisi (Intranet)",
+            "durum": "aktif",
+            "ag_erisim_adresi": "http://0.0.0.0:8000",
+            "interaktif_swagger_arayuzu": "/docs",
+            "endpoints": {
+                "POST /api/analyze": "Venn Şeması küme analizi",
+                "GET /api/activities": "Mevcut faaliyetler ve fazlar",
+                "GET /api/preview": "Excel önizleme"
+            }
+        }
+
+    @web_app.post("/api/analyze")
+    def api_analyze(req: AnalyzeRequest):
+        return execute_analyze_venn(
+            file_path=req.file_path,
+            compare_by=req.compare_by,
+            activity_name=req.activity_name,
+            sheet_name=req.sheet_name,
+            activity_column=req.activity_column,
+            phase_column=req.phase_column,
+            issue_column=req.issue_column
+        )
+
+    @web_app.get("/api/activities")
+    def api_activities(file_path: str, sheet_name: Optional[str] = None):
+        return execute_list_activities_and_phases(file_path=file_path, sheet_name=sheet_name)
+
+    @web_app.get("/api/preview")
+    def api_preview(file_path: str, max_rows: int = 5, sheet_name: Optional[str] = None):
+        return execute_preview_excel_data(file_path=file_path, max_rows=max_rows, sheet_name=sheet_name)
+
+    # RAG ve MCP için standart JSON-RPC HTTP Endpoint
+    @web_app.post("/mcp")
+    async def mcp_http_endpoint(payload: Dict[str, Any]):
+        method = payload.get("method")
+        params = payload.get("params", {})
+        req_id = payload.get("id", 1)
+
+        if method == "tools/list":
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "analyze_venn_nonconformities",
+                            "description": "Excel'deki uygunsuzlukları Venn şeması ile analiz eder.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "file_path": {"type": "string"},
+                                    "compare_by": {"type": "string", "default": "phases"},
+                                    "activity_name": {"type": "string"}
+                                },
+                                "required": ["file_path"]
+                            }
+                        },
+                        {
+                            "name": "list_activities_and_phases",
+                            "description": "Faaliyet ve faz listesini keşfeder.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {"file_path": {"type": "string"}},
+                                "required": ["file_path"]
+                            }
+                        }
+                    ]
+                }
+            }
+        elif method == "tools/call":
+            tool_name = params.get("name")
+            args = params.get("arguments", {})
+            if tool_name == "analyze_venn_nonconformities":
+                res = execute_analyze_venn(**args)
+            elif tool_name == "list_activities_and_phases":
+                res = execute_list_activities_and_phases(**args)
+            elif tool_name == "preview_excel_data":
+                res = execute_preview_excel_data(**args)
+            else:
+                return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Bilinmeyen tool"}}
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}]}
+            }
+        else:
+            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
+except Exception as import_err:
+    web_app = None
+
+
+# ==============================================================================
+# CLI ve Sunucu Başlatma
 # ==============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Venn Diagram Nonconformity RAG MCP Server (Intranet Compatible)"
+        description="Venn Diagram Nonconformity RAG & HTTP Server (Intranet Compatible)"
     )
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
-        default="stdio",
-        help="İletişim protokolü: 'stdio' veya 'sse'."
+        choices=["http", "stdio", "sse"],
+        default="http",
+        help="Protokol: 'http' (Ağdaki herkese açık REST API - Önerilen), 'stdio' veya 'sse'."
     )
     parser.add_argument(
         "--host",
         default="0.0.0.0",
-        help="SSE protokolünde dinlenecek ağ adresi (varsayılan: 0.0.0.0)."
+        help="Ağ adresi (varsayılan: 0.0.0.0, intranet üzerindeki herkese açık)."
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8000,
-        help="SSE protokolünde dinlenecek port numarası (varsayılan: 8000)."
+        help="Port numarası (varsayılan: 8000)."
     )
 
     args = parser.parse_args()
 
-    sys.stderr.write(f"[MCP Server] Başlatılıyor... Taşıyıcı: {args.transport.upper()}\n")
-
-    if args.transport == "stdio":
-        sys.stderr.write("[MCP Server] stdio modunda hazır.\n")
-        app.run(transport="stdio")
-    elif args.transport == "sse":
+    # 1. Ağdaki Herkese Açık Standart HTTP Modu (Önerilen)
+    if args.transport in ["http", "sse"]:
+        import uvicorn
         sys.stderr.write(
-            f"[MCP Server] SSE/HTTP modunda dinleniyor: http://{args.host}:{args.port}/sse\n"
+            f"\n"
+            f"===============================================================================\n"
+            f"[HTTP SUNUCUSU] Agdaki Herkese Acik Olarak Baslatiliyor!\n"
+            f"Adres: http://{args.host}:{args.port}\n"
+            f"Tarayicidan erisim / Dokumantasyon: http://<SANAL_PC_IP>:{args.port}/docs\n"
+            f"Durdurmak icin CTRL+C tuslarina basin.\n"
+            f"===============================================================================\n\n"
         )
-        if IS_MCP_V2:
-            app.run(transport="sse", host=args.host, port=args.port)
-        else:
-            app.run(transport="sse")
+        uvicorn.run(web_app or "app:web_app", host=args.host, port=args.port, reload=False)
+
+    # 2. Yerel stdio Modu (Aynı PC'de LLM istemcisi için)
+    elif args.transport == "stdio":
+        try:
+            from mcp.server.mcpserver import MCPServer
+            mcp_srv = MCPServer("VennRAGServer")
+            @mcp_srv.tool()
+            def analyze_venn(file_path: str, compare_by: str = "phases", activity_name: Optional[str] = None) -> str:
+                return analyze_venn_nonconformities(file_path, compare_by, activity_name)
+            mcp_srv.run(transport="stdio")
+        except Exception as e:
+            sys.stderr.write(f"[HATA] stdio modu baslatilamadi: {e}\n")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
