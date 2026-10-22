@@ -11,7 +11,7 @@
     baseUrl: 'https://llmsuiteflow.aiplatform.aselsan.com.tr',
     flowId: 'c16ecc83-ff64-4fc7-bb52-0f594beaf70a',
     apiKey: '',
-    tweaksInput: 'ChatInput-jugL4'
+    tweaksInput: ''
   };
 
   let appConfig = loadConfig();
@@ -316,7 +316,7 @@
       formData.append('base_url', appConfig.baseUrl);
       formData.append('flow_id', appConfig.flowId);
       formData.append('api_key', appConfig.apiKey || '');
-      formData.append('tweaks_input', appConfig.tweaksInput || 'ChatInput-jugL4');
+      formData.append('tweaks_input', appConfig.tweaksInput || '');
 
       const colMatch = document.getElementById('colMatchSelect').value;
       if (colMatch && colMatch !== 'auto') {
@@ -710,7 +710,11 @@
     try {
       const stored = localStorage.getItem('aselsan_flow_config');
       if (stored) {
-        return { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
+        const parsed = JSON.parse(stored);
+        if (parsed.tweaksInput === 'ChatInput-jugL4') {
+          parsed.tweaksInput = '';
+        }
+        return { ...DEFAULT_CONFIG, ...parsed };
       }
     } catch (e) { }
     return { ...DEFAULT_CONFIG };

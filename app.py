@@ -823,14 +823,16 @@ def call_aselsan_llm_suite_flow(
         "output_type": "chat",
         "input_type": "chat",
         "input_value": prompt_text,
-        "session_id": session_id,
-        "tweaks": {}
+        "session_id": session_id
     }
 
-    if tweaks_input:
-        payload["tweaks"][tweaks_input] = {
-            "files": uploaded_file_paths,
-            "input_value": ""
+    # Yalnızca dosya upload başarılı olduysa tweaks ekle, asla input_value'yu boş bırakma!
+    if uploaded_file_paths and tweaks_input and str(tweaks_input).strip():
+        payload["tweaks"] = {
+            tweaks_input.strip(): {
+                "files": uploaded_file_paths,
+                "input_value": prompt_text
+            }
         }
 
     run_url = f"{base_url}/api/v1/run/{flow_id}"
@@ -844,8 +846,7 @@ def call_aselsan_llm_suite_flow(
                 "### 📌 Matematiksel Venn Şeması ve Küme Analizi Hazır!\n\n"
                 "İki Excel dosyasındaki uygunsuzluklar başarıyla karşılaştırıldı ve görsel Venn şeması oluşturuldu.\n\n"
                 "**ASELSAN LLM Suite Flow Bağlantısı:**\n"
-                f"- **Hedef Akış:** `{base_url}/api/v1/run/{flow_id}`\n"
-                f"- **Bileşen:** `{tweaks_input}`\n\n"
+                f"- **Hedef Akış:** `{base_url}/api/v1/run/{flow_id}`\n\n"
                 "Akıllı yapay zeka yorumu, kök neden analizi ve risk sınıflandırmasını almak için sağ üst köşedeki "
                 "**⚙️ Ayarlar** butonuna tıklayarak **API Key (x-api-key)** bilginizi kaydedebilirsiniz."
             )
@@ -853,7 +854,30 @@ def call_aselsan_llm_suite_flow(
 
     try:
         resp = requests.post(run_url, headers=req_headers, json=payload, timeout=90, verify=False)
-        resp.raise_for_status()
+        
+        # 400 hatası alındıysa ve tweaks varsa, tweaks olmadan (saf prompt ile) tekrar dene
+        if resp.status_code == 400 and "tweaks" in payload:
+            clean_payload = {
+                "output_type": "chat",
+                "input_type": "chat",
+                "input_value": prompt_text,
+                "session_id": session_id
+            }
+            resp = requests.post(run_url, headers=req_headers, json=clean_payload, timeout=90, verify=False)
+
+        if resp.status_code >= 400:
+            err_detail = ""
+            try:
+                err_json = resp.json()
+                err_detail = err_json.get("detail") or err_json.get("message") or json.dumps(err_json, ensure_ascii=False)
+            except Exception:
+                err_detail = resp.text
+            return {
+                "durum": "hata",
+                "mesaj": f"ASELSAN LLM Suite Flow hatası ({resp.status_code}): {err_detail}",
+                "session_id": session_id
+            }
+
         res_json = resp.json()
         extracted_text = extract_langflow_response(res_json)
         return {
@@ -863,9 +887,15 @@ def call_aselsan_llm_suite_flow(
             "raw": res_json
         }
     except requests.exceptions.RequestException as req_err:
+        err_msg = str(req_err)
+        if hasattr(req_err, "response") and req_err.response is not None:
+            try:
+                err_msg += f" - Detay: {req_err.response.text}"
+            except Exception:
+                pass
         return {
             "durum": "hata",
-            "mesaj": f"ASELSAN LLM Suite Flow bağlantı hatası: {str(req_err)}",
+            "mesaj": f"ASELSAN LLM Suite Flow bağlantı hatası: {err_msg}",
             "session_id": session_id
         }
 
