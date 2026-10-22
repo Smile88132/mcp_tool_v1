@@ -16,6 +16,7 @@ import json
 import uuid
 import argparse
 import unicodedata
+from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 import requests
@@ -621,14 +622,134 @@ def preview_excel_data(file_path: str, max_rows: int = 5, sheet_name: Optional[s
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
+def calculate_text_similarity(s1: str, s2: str) -> float:
+    """
+    İki metin arasındaki benzerlik puanını (0.0 - 1.0) hesaplar.
+    Levenshtein SequenceMatcher + Kelime Sırası Bağımsız Token Sort + Jaccard token kesişimi.
+    """
+    if not s1 or not s2:
+        return 0.0
+    n1 = normalize_str(s1)
+    n2 = normalize_str(s2)
+    if n1 == n2:
+        return 1.0
+
+    seq_ratio = SequenceMatcher(None, n1, n2).ratio()
+    if seq_ratio >= 0.98:
+        return 1.0
+
+    tokens1 = n1.split()
+    tokens2 = n2.split()
+    sorted1 = " ".join(sorted(tokens1))
+    sorted2 = " ".join(sorted(tokens2))
+    token_ratio = SequenceMatcher(None, sorted1, sorted2).ratio()
+
+    set1, set2 = set(tokens1), set(tokens2)
+    union_len = len(set1 | set2)
+    jaccard_tokens = len(set1 & set2) / union_len if union_len > 0 else 0.0
+
+    combined = max(seq_ratio, token_ratio) * 0.7 + jaccard_tokens * 0.3
+    return round(min(max(combined, 0.0), 1.0), 4)
+
+
+def compute_fuzzy_venn(
+    items_a: List[str],
+    items_b: List[str],
+    threshold: float = 0.80
+) -> Dict[str, Any]:
+    """
+    İki metin listesini satır bazlı karşılaştırır.
+    Eğer threshold >= 1.0 ise tam eşleşme (exact match),
+    threshold < 1.0 ise fuzzy distance matching yapar.
+    """
+    clean_a = [clean_text_content(x) for x in items_a if clean_text_content(x)]
+    clean_b = [clean_text_content(x) for x in items_b if clean_text_content(x)]
+
+    unique_a = list(dict.fromkeys(clean_a))
+    unique_b = list(dict.fromkeys(clean_b))
+
+    matched_pairs: List[Dict[str, Any]] = []
+    used_b_indices: Set[int] = set()
+
+    # 1. Aşama: Tam normalleştirilmiş eşleşmeler
+    norm_b_map: Dict[str, List[int]] = {}
+    for idx_b, b in enumerate(unique_b):
+        nb = normalize_str(b)
+        if nb not in norm_b_map:
+            norm_b_map[nb] = []
+        norm_b_map[nb].append(idx_b)
+
+    candidates_a = []
+    for a in unique_a:
+        na = normalize_str(a)
+        if na in norm_b_map and norm_b_map[na]:
+            matched_b_idx = norm_b_map[na].pop(0)
+            used_b_indices.add(matched_b_idx)
+            matched_pairs.append({
+                "item_a": a,
+                "item_b": unique_b[matched_b_idx],
+                "similarity": 100.0,
+                "match_type": "Tam Eşleşme"
+            })
+        else:
+            candidates_a.append(a)
+
+    # 2. Aşama: Eşik < 1.0 ise Fuzzy Benzerlik Eşlemesi
+    assigned_a = set()
+    if threshold < 1.0 and candidates_a:
+        available_b_indices = [i for i in range(len(unique_b)) if i not in used_b_indices]
+        pair_scores = []
+        for a in candidates_a:
+            for i_b in available_b_indices:
+                score = calculate_text_similarity(a, unique_b[i_b])
+                if score >= threshold:
+                    pair_scores.append((score, a, i_b))
+
+        # En yüksek benzerlikten en düşüğe açgözlü (greedy) eşleme
+        pair_scores.sort(key=lambda x: x[0], reverse=True)
+        for score, a, i_b in pair_scores:
+            if a not in assigned_a and i_b not in used_b_indices:
+                assigned_a.add(a)
+                used_b_indices.add(i_b)
+                pct = round(score * 100, 1)
+                matched_pairs.append({
+                    "item_a": a,
+                    "item_b": unique_b[i_b],
+                    "similarity": pct,
+                    "match_type": f"Benzer (%{pct})"
+                })
+
+    unmatched_a = [a for a in candidates_a if a not in assigned_a]
+    unmatched_b = [unique_b[i] for i in range(len(unique_b)) if i not in used_b_indices]
+
+    total_unique = len(matched_pairs) + len(unmatched_a) + len(unmatched_b)
+    jaccard = round(len(matched_pairs) / total_unique, 4) if total_unique > 0 else 1.0
+
+    return {
+        "intersection_count": len(matched_pairs),
+        "only_a_count": len(unmatched_a),
+        "only_b_count": len(unmatched_b),
+        "total_unique": total_unique,
+        "jaccard_similarity": jaccard,
+        "matched_pairs": matched_pairs,
+        "intersection_items": [f"{p['item_a']} ↔ {p['item_b']} (%{p['similarity']})" if p['item_a'] != p['item_b'] else p['item_a'] for p in matched_pairs],
+        "only_a_items": sorted(unmatched_a),
+        "only_b_items": sorted(unmatched_b),
+        "threshold_used": threshold
+    }
+
+
 def execute_compare_two_excels(
     file_1: Any,
     file_2: Any,
     file_1_name: str = "1. Belge",
     file_2_name: str = "2. Belge",
     column_name: Optional[str] = None,
+    col1_name: Optional[str] = None,
+    col2_name: Optional[str] = None,
     sheet_name_1: Optional[str] = None,
-    sheet_name_2: Optional[str] = None
+    sheet_name_2: Optional[str] = None,
+    threshold: float = 1.0
 ) -> Dict[str, Any]:
     """
     İki farklı Excel dosyasını okuyarak uygunsuzluklar arasındaki Venn küme matematiğini
@@ -638,15 +759,18 @@ def execute_compare_two_excels(
         df1 = read_excel_safe(file_1, sheet_name=sheet_name_1)
         df2 = read_excel_safe(file_2, sheet_name=sheet_name_2)
 
-        col1 = None
-        col2 = None
+        col1 = col1_name
+        col2 = col2_name
 
-        if column_name and str(column_name).strip() and column_name != "auto":
+        if not col1 and column_name and str(column_name).strip() and column_name != "auto":
             norm_req = normalize_str(column_name)
             for c in df1.columns:
                 if normalize_str(c) == norm_req or norm_req in normalize_str(c):
                     col1 = c
                     break
+
+        if not col2 and column_name and str(column_name).strip() and column_name != "auto":
+            norm_req = normalize_str(column_name)
             for c in df2.columns:
                 if normalize_str(c) == norm_req or norm_req in normalize_str(c):
                     col2 = c
@@ -667,20 +791,13 @@ def execute_compare_two_excels(
         items_1_raw = df1[col1].dropna().astype(str).tolist()
         items_2_raw = df2[col2].dropna().astype(str).tolist()
 
-        set_a = {clean_text_content(x) for x in items_1_raw if clean_text_content(x)}
-        set_b = {clean_text_content(x) for x in items_2_raw if clean_text_content(x)}
-
-        only_a = set_a - set_b
-        only_b = set_b - set_a
-        intersection = set_a & set_b
-        total_union = set_a | set_b
-        jaccard = round(len(intersection) / len(total_union), 4) if total_union else 0.0
+        venn_res = compute_fuzzy_venn(items_1_raw, items_2_raw, threshold=threshold)
 
         summary_note = (
-            f"'{file_1_name}' ({len(set_a)} benzersiz kayıt) ile '{file_2_name}' ({len(set_b)} benzersiz kayıt) kıyaslandı. "
-            f"Toplam {len(total_union)} farklı uygunsuzluk tespit edildi. "
-            f"{len(intersection)} uygunsuzluk her iki belgede de ortaktır (Jaccard Benzerlik Oranı: %{round(jaccard * 100, 1)}). "
-            f"{len(only_a)} uygunsuzluk yalnızca 1. belgede, {len(only_b)} uygunsuzluk ise yalnızca 2. belgede yer almaktadır."
+            f"'{file_1_name}' ({len(set(items_1_raw))} benzersiz kayıt) ile '{file_2_name}' ({len(set(items_2_raw))} benzersiz kayıt) kıyaslandı. "
+            f"Toplam {venn_res['total_unique']} farklı uygunsuzluk tespit edildi. "
+            f"{venn_res['intersection_count']} uygunsuzluk her iki belgede de ortaktır (Jaccard Benzerlik Oranı: %{round(venn_res['jaccard_similarity'] * 100, 1)}). "
+            f"{venn_res['only_a_count']} uygunsuzluk yalnızca 1. belgede, {venn_res['only_b_count']} uygunsuzluk ise yalnızca 2. belgede yer almaktadır."
         )
 
         return {
@@ -690,16 +807,7 @@ def execute_compare_two_excels(
             "karsilastirilan_sutun_1": col1,
             "karsilastirilan_sutun_2": col2,
             "ozet_yorum": summary_note,
-            "venn_verileri": {
-                "only_a_count": len(only_a),
-                "intersection_count": len(intersection),
-                "only_b_count": len(only_b),
-                "total_unique": len(total_union),
-                "jaccard_similarity": jaccard,
-                "only_a_items": sorted(list(only_a)),
-                "intersection_items": sorted(list(intersection)),
-                "only_b_items": sorted(list(only_b)),
-            }
+            "venn_verileri": venn_res
         }
     except Exception as e:
         return {
@@ -900,6 +1008,135 @@ def call_aselsan_llm_suite_flow(
         }
 
 
+def fetch_aselix_models(base_url: str = "https://api.aselixai.aselsan.com.tr/v1", api_key: Optional[str] = None) -> Dict[str, Any]:
+    """
+    ASELSAN AselixAI REST API üzerinden mevcut modelleri listeler (GET /models).
+    Hem Milli Ağ (https://api.aselixai.aselsan.com.tr/v1) hem de Aynet Ağı 
+    (https://agate.aselsan.com.tr/send/milli/api.aselixai/v1) ile uyumludur.
+    """
+    if not base_url:
+        base_url = "https://api.aselixai.aselsan.com.tr/v1"
+    base_url = base_url.rstrip("/")
+    url = f"{base_url}/models"
+    headers = {"Content-Type": "application/json"}
+    if api_key and api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+        headers["x-api-key"] = api_key.strip()
+
+    fallback_models = [
+        "aselix-llm-v1",
+        "aselix-chat-default",
+        "llama-3-8b-instruct",
+        "mistral-7b-instruct",
+        "qwen-2.5-7b-instruct"
+    ]
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=10, verify=False)
+        if resp.status_code == 200:
+            data = resp.json()
+            model_ids = []
+            if isinstance(data, dict):
+                items = data.get("data") or data.get("models") or []
+                if isinstance(items, list):
+                    for it in items:
+                        if isinstance(it, dict) and "id" in it:
+                            model_ids.append(it["id"])
+                        elif isinstance(it, str):
+                            model_ids.append(it)
+            elif isinstance(data, list):
+                for it in data:
+                    if isinstance(it, dict) and "id" in it:
+                        model_ids.append(it["id"])
+                    elif isinstance(it, str):
+                        model_ids.append(it)
+
+            return {
+                "durum": "basarili",
+                "kaynak": "canli_api",
+                "base_url": base_url,
+                "modeller": model_ids if model_ids else fallback_models,
+                "mesaj": f"{len(model_ids)} model AselixAI API'den başarıyla listelendi."
+            }
+        else:
+            return {
+                "durum": "uyari",
+                "hata_kodu": resp.status_code,
+                "base_url": base_url,
+                "mesaj": f"AselixAI API yanıtı ({resp.status_code}): {resp.text[:200]}",
+                "modeller": fallback_models
+            }
+    except Exception as e:
+        return {
+            "durum": "uyari",
+            "hata_turu": type(e).__name__,
+            "base_url": base_url,
+            "mesaj": f"API çağrısı uyarısı (İntranet veya anahtar kontrolü gerekebilir): {str(e)}",
+            "modeller": fallback_models
+        }
+
+
+def call_aselix_chat(
+    base_url: str = "https://api.aselixai.aselsan.com.tr/v1",
+    api_key: Optional[str] = None,
+    model: str = "aselix-llm-v1",
+    messages: Optional[List[Dict[str, str]]] = None,
+    temperature: float = 0.2
+) -> Dict[str, Any]:
+    """
+    ASELSAN AselixAI POST /chat/completions endpointine OpenAI uyumlu istek gönderir.
+    """
+    if not base_url:
+        base_url = "https://api.aselixai.aselsan.com.tr/v1"
+    base_url = base_url.rstrip("/")
+    url = f"{base_url}/chat/completions"
+
+    headers = {"Content-Type": "application/json"}
+    if api_key and api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+        headers["x-api-key"] = api_key.strip()
+
+    payload = {
+        "model": model or "aselix-llm-v1",
+        "messages": messages or [{"role": "user", "content": "Merhaba"}],
+        "temperature": temperature
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=60, verify=False)
+        if resp.status_code == 200:
+            data = resp.json()
+            content = ""
+            if isinstance(data, dict):
+                choices = data.get("choices", [])
+                if choices and isinstance(choices, list):
+                    first_choice = choices[0]
+                    if isinstance(first_choice, dict):
+                        msg = first_choice.get("message", {})
+                        if isinstance(msg, dict):
+                            content = msg.get("content", "")
+            if not content:
+                content = json.dumps(data, ensure_ascii=False)
+            return {
+                "durum": "basarili",
+                "model": model,
+                "cevap": content,
+                "raw": data
+            }
+        else:
+            return {
+                "durum": "hata",
+                "hata_kodu": resp.status_code,
+                "mesaj": f"AselixAI API Hatası ({resp.status_code}): {resp.text}"
+            }
+    except Exception as e:
+        return {
+            "durum": "hata",
+            "hata_turu": type(e).__name__,
+            "mesaj": f"AselixAI API Çağrı Hatası: {str(e)}"
+        }
+
+
 # ==============================================================================
 # AĞDAKİ HERKESE AÇIK HTTP WEB SERVİSİ (FastAPI / Starlette)
 # ==============================================================================
@@ -960,6 +1197,18 @@ try:
         base_url: Optional[str] = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
         flow_id: Optional[str] = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
         api_key: Optional[str] = ""
+
+    class AselixModelsRequest(BaseModel):
+        base_url: Optional[str] = "https://api.aselixai.aselsan.com.tr/v1"
+        api_key: Optional[str] = ""
+
+    class AselixChatRequest(BaseModel):
+        base_url: Optional[str] = "https://api.aselixai.aselsan.com.tr/v1"
+        api_key: Optional[str] = ""
+        model: Optional[str] = "aselix-llm-v1"
+        messages: List[Dict[str, str]]
+        temperature: Optional[float] = 0.2
+        context: Optional[Dict[str, Any]] = None
 
     @web_app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
@@ -1152,6 +1401,225 @@ try:
         )
 
         return flow_res
+
+    @web_app.post("/api/compare/excel-preview")
+    async def api_compare_excel_preview(file: UploadFile = File(...)):
+        """Excel dosyasının sütunlarını ve ilk 5 satırını önizleme tablosu için döndürür."""
+        try:
+            content = await file.read()
+            df = read_excel_safe(content)
+            cols = [str(c) for c in df.columns]
+            suggested = None
+            try:
+                _, _, suggested = resolve_columns(df)
+            except Exception:
+                pass
+            if not suggested and cols:
+                suggested = cols[0]
+
+            preview_df = df.head(5).copy()
+            preview_rows = preview_df.where(pd.notnull(preview_df), None).to_dict(orient="records")
+
+            return {
+                "durum": "basarili",
+                "dosya_adi": file.filename or "excel_belgesi.xlsx",
+                "toplam_satir": len(df),
+                "sutunlar": cols,
+                "onerilen_sutun": suggested,
+                "onizleme_satirlari": preview_rows
+            }
+        except Exception as e:
+            return {
+                "durum": "hata",
+                "mesaj": f"Excel dosyası okunamadı: {str(e)}"
+            }
+
+    @web_app.post("/api/aselix/models")
+    async def api_aselix_models(req: AselixModelsRequest):
+        """Aselsan AselixAI API'sinden (GET /models) mevcut modelleri çeker."""
+        return fetch_aselix_models(
+            base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
+            api_key=req.api_key
+        )
+
+    @web_app.post("/api/aselix/chat")
+    async def api_aselix_chat(req: AselixChatRequest):
+        """Aselsan AselixAI (POST /chat/completions) üzerinden sohbet ve analiz yanıtı üretir."""
+        msgs = []
+        if req.context:
+            ctx_info = (
+                f"[Kıyaslanan Veriler: '{req.context.get('dosya_1', '1. Veri')}' vs '{req.context.get('dosya_2', '2. Veri')}'. "
+                f"Ortak Kesişim: {req.context.get('intersection_count', 0)}, "
+                f"Yalnızca 1: {req.context.get('only_a_count', 0)}, "
+                f"Yalnızca 2: {req.context.get('only_b_count', 0)}, "
+                f"Jaccard Benzerlik: %{round(float(req.context.get('jaccard_similarity', 0)) * 100, 1)}, "
+                f"Uygulanan Benzerlik Eşiği: %{round(float(req.context.get('esik_orani', 0.8)) * 100)}]\n"
+            )
+            msgs.append({
+                "role": "system",
+                "content": (
+                    "Sen ASELSAN sistem ve kalite güvence mühendisliği konusunda uzman kıdemli bir yapay zeka analiz asistanısın. "
+                    f"Kullanıcının yaptığı son kıyaslama bağlamı:\n{ctx_info}\n"
+                    "Soruları profesyonel, yapıcı, teknik ve somut aksiyon adımları içeren bir üslupla yanıtla."
+                )
+            })
+
+        for m in req.messages:
+            msgs.append(m)
+
+        return call_aselix_chat(
+            base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
+            api_key=req.api_key,
+            model=req.model or "aselix-llm-v1",
+            messages=msgs,
+            temperature=req.temperature or 0.2
+        )
+
+    @web_app.post("/api/compare/run")
+    async def api_compare_run(
+        input_mode: str = Form("excel"),
+        engine_mode: str = Form("local"),
+        threshold: float = Form(0.80),
+        file_1: Optional[UploadFile] = File(None),
+        file_2: Optional[UploadFile] = File(None),
+        col_1: Optional[str] = Form(None),
+        col_2: Optional[str] = Form(None),
+        text_1: Optional[str] = Form(None),
+        text_2: Optional[str] = Form(None),
+        name_1: Optional[str] = Form("1. Veri Seti"),
+        name_2: Optional[str] = Form("2. Veri Seti"),
+        base_url: Optional[str] = Form("https://api.aselixai.aselsan.com.tr/v1"),
+        api_key: Optional[str] = Form(""),
+        model: Optional[str] = Form("aselix-llm-v1")
+    ):
+        """
+        Hem Excel dosyası yükleme hem de Metin Kopyala-Yapıştır (Copy-Paste) için evrensel kıyaslama çalıştırır:
+        1. Yerel String Distance / Fuzzy Matching (%50 - %100 threshold) ile çevrimdışı çalışır.
+        2. İsteğe bağlı olarak Aselsan AselixAI API ile yönetici özeti, risk analizi ve aksiyon planı üretir.
+        """
+        items_1: List[str] = []
+        items_2: List[str] = []
+
+        doc1_name = name_1 or "1. Veri"
+        doc2_name = name_2 or "2. Veri"
+        chosen_col1 = col_1
+        chosen_col2 = col_2
+
+        if input_mode == "excel":
+            if not file_1 or not file_2:
+                return {"durum": "hata", "mesaj": "Lütfen kıyaslanacak iki adet Excel dosyası yükleyin."}
+
+            try:
+                f1_bytes = await file_1.read()
+                f2_bytes = await file_2.read()
+                doc1_name = file_1.filename or "1. Belge"
+                doc2_name = file_2.filename or "2. Belge"
+
+                df1 = read_excel_safe(f1_bytes)
+                df2 = read_excel_safe(f2_bytes)
+
+                if not chosen_col1 or chosen_col1 == "auto" or chosen_col1 not in df1.columns:
+                    try:
+                        _, _, chosen_col1 = resolve_columns(df1)
+                    except Exception:
+                        chosen_col1 = df1.columns[0]
+
+                if not chosen_col2 or chosen_col2 == "auto" or chosen_col2 not in df2.columns:
+                    try:
+                        _, _, chosen_col2 = resolve_columns(df2)
+                    except Exception:
+                        chosen_col2 = df2.columns[0]
+
+                items_1 = df1[chosen_col1].dropna().astype(str).tolist()
+                items_2 = df2[chosen_col2].dropna().astype(str).tolist()
+            except Exception as e:
+                return {"durum": "hata", "mesaj": f"Excel dosyaları işlenirken hata oluştu: {str(e)}"}
+
+        else: # Metin Kopyala / Yapıştır
+            if not text_1 or not text_1.strip() or not text_2 or not text_2.strip():
+                return {"durum": "hata", "mesaj": "Lütfen her iki metin alanına da kıyaslanacak satırları girin."}
+
+            items_1 = [line.strip() for line in (text_1 or "").splitlines() if line.strip()]
+            items_2 = [line.strip() for line in (text_2 or "").splitlines() if line.strip()]
+            chosen_col1 = "Metin Satırları"
+            chosen_col2 = "Metin Satırları"
+
+        if not items_1 or not items_2:
+            return {"durum": "hata", "mesaj": "Kıyaslama yapılacak geçerli satır veya veri bulunamadı."}
+
+        # Yerel Fuzzy Distance / Levenshtein + Token Kümeleri Benzerliği
+        venn_res = compute_fuzzy_venn(items_1, items_2, threshold=threshold)
+
+        jaccard_pct = round(venn_res["jaccard_similarity"] * 100, 1)
+        summary_note = (
+            f"'{doc1_name}' ({len(set(items_1))} kayıt) ile '{doc2_name}' ({len(set(items_2))} kayıt) kıyaslandı. "
+            f"Benzerlik eşiği %{round(threshold * 100)} olarak uygulandı. "
+            f"Toplam {venn_res['total_unique']} farklı uygunsuzluk tespit edildi. "
+            f"{venn_res['intersection_count']} uygunsuzluk her iki belgede de ortaktır (Jaccard Benzerlik Oranı: %{jaccard_pct}). "
+            f"{venn_res['only_a_count']} uygunsuzluk yalnızca 1. grupta, {venn_res['only_b_count']} uygunsuzluk ise yalnızca 2. grupta yer almaktadır."
+        )
+
+        ai_summary = ""
+        ai_durum = "kapali"
+
+        if engine_mode == "aselix" and api_key and api_key.strip():
+            sample_common = "\n- ".join(venn_res["intersection_items"][:10]) or "Yok"
+            sample_only_b = "\n- ".join(venn_res["only_b_items"][:8]) or "Yok"
+            sample_only_a = "\n- ".join(venn_res["only_a_items"][:8]) or "Yok"
+
+            system_msg = (
+                "Sen ASELSAN sistem ve kalite güvence mühendisliği konusunda uzman kıdemli bir yapay zeka analiz asistanısın. "
+                "İki test fazı veya veri seti arasındaki uygunsuzlukları kıyaslar, kök neden analizi yapar ve yönetici özeti sunarsın."
+            )
+            user_msg = (
+                f"Kıyaslanan Belgeler: '{doc1_name}' vs '{doc2_name}'\n"
+                f"Benzerlik Eşiği: %{round(threshold * 100)}\n\n"
+                f"İstatistiksel Özet:\n"
+                f"• Toplam Farklı Kayıt: {venn_res['total_unique']}\n"
+                f"• Ortak Kesişim (Her iki belgede tekrarlayan): {venn_res['intersection_count']}\n"
+                f"• Yalnızca 1. Belgede (Çözülmüş / giderilmiş): {venn_res['only_a_count']}\n"
+                f"• Yalnızca 2. Belgede (Yeni ortaya çıkan): {venn_res['only_b_count']}\n"
+                f"• Jaccard Benzerlik Oranı: %{jaccard_pct}\n\n"
+                f"Örnek Ortak Uygunsuzluklar:\n- {sample_common}\n\n"
+                f"Örnek Yeni Ortaya Çıkanlar (Yalnızca 2. Belge):\n- {sample_only_b}\n\n"
+                f"Örnek Çözülenler (Yalnızca 1. Belge):\n- {sample_only_a}\n\n"
+                f"Lütfen bir Sistem Mühendisi ve Kalite Güvence Uzmanı olarak:\n"
+                f"1. Kronik tekrarlayan ortak uygunsuzlukların kök neden risk analizini yap.\n"
+                f"2. Yeni ortaya çıkan beklenmedik sapmaları değerlendir.\n"
+                f"3. Kalite ve test ekiplerinin derhal alması gereken 3 somut önleyici aksiyon önerisi sun.\n"
+                f"Yanıtını profesyonel, maddeler halinde ve yönetici özeti şeklinde yapılandır."
+            )
+            chat_res = call_aselix_chat(
+                base_url=base_url or "https://api.aselixai.aselsan.com.tr/v1",
+                api_key=api_key,
+                model=model or "aselix-llm-v1",
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg}
+                ]
+            )
+            if chat_res.get("durum") == "basarili":
+                ai_summary = chat_res.get("cevap", "")
+                ai_durum = "basarili"
+            else:
+                ai_summary = f"AselixAI API Uyarısı: {chat_res.get('mesaj', '')}"
+                ai_durum = "uyari"
+
+        return {
+            "durum": "basarili",
+            "input_mode": input_mode,
+            "engine_mode": engine_mode,
+            "dosya_1_adi": doc1_name,
+            "dosya_2_adi": doc2_name,
+            "karsilastirilan_sutun_1": chosen_col1,
+            "karsilastirilan_sutun_2": chosen_col2,
+            "esik_orani": threshold,
+            "ozet_yorum": summary_note,
+            "venn_verileri": venn_res,
+            "flow_analiz_ozeti": ai_summary,
+            "ai_durum": ai_durum,
+            "model_kullanilan": model
+        }
 
     # --------------------------------------------------------------------------
     # MODEL CONTEXT PROTOCOL (MCP) JSON-RPC 2.0 HTTP İŞLEYİCİSİ

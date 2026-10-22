@@ -57,26 +57,39 @@ class TestTwoExcelComparison(unittest.TestCase):
         self.assertEqual(v["only_b_count"], 0)
         self.assertEqual(v["jaccard_similarity"], 1.0)
 
-    def test_extract_langflow_response(self):
-        # Test standard nested Langflow response
-        sample_langflow_json = {
-            "session_id": "test-session",
-            "outputs": [
-                {
-                    "outputs": [
-                        {
-                            "results": {
-                                "message": {
-                                    "text": "ASELSAN LLM Suite Analiz Çıktısı: Her iki fazda da kritik pano hataları gözlenmiştir."
-                                }
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
-        extracted = extract_langflow_response(sample_langflow_json)
-        self.assertIn("ASELSAN LLM Suite Analiz Çıktısı", extracted)
+    def test_calculate_text_similarity(self):
+        from app import calculate_text_similarity
+        # Identical strings
+        self.assertEqual(calculate_text_similarity("Pano montaj hatası", "Pano montaj hatası"), 1.0)
+        # Word order difference
+        sim_order = calculate_text_similarity("Pano montaj hatası", "montaj hatası pano")
+        self.assertGreaterEqual(sim_order, 0.85)
+        # Completely different
+        sim_diff = calculate_text_similarity("Kablo kesiti hatalı", "Yazılım derleme hatası")
+        self.assertLess(sim_diff, 0.40)
+
+    def test_compute_fuzzy_venn(self):
+        from app import compute_fuzzy_venn
+        list_a = ["Pano içi etiketleme eksik", "Kablo gevşek", "Hidrolik sızdırmazlık arızası"]
+        list_b = ["etiketleme eksik pano içi", "Kablo gevşek", "Yazılım derleme hatası"]
+        
+        # Exact match (threshold 1.0)
+        res_exact = compute_fuzzy_venn(list_a, list_b, threshold=1.0)
+        self.assertEqual(res_exact["intersection_count"], 1) # Only "Kablo gevşek"
+        
+        # Fuzzy match (threshold 0.80)
+        res_fuzzy = compute_fuzzy_venn(list_a, list_b, threshold=0.80)
+        self.assertEqual(res_fuzzy["intersection_count"], 2) # Both "Kablo gevşek" and reordered "etiketleme..."
+        self.assertEqual(res_fuzzy["only_a_count"], 1)
+        self.assertEqual(res_fuzzy["only_b_count"], 1)
+
+    def test_fetch_aselix_models_fallback(self):
+        from app import fetch_aselix_models
+        # Even with dummy/unreachable URL, it should return models list gracefully
+        res = fetch_aselix_models(base_url="https://api.aselixai.aselsan.com.tr/v1", api_key="dummy_key")
+        self.assertIn("modeller", res)
+        self.assertGreater(len(res["modeller"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

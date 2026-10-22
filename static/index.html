@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VennFlow AI - İki Excel Kıyaslama ve Venn Şeması Analiz Platformu</title>
+  <title>VennFlow AI - Excel ve Metin Kıyaslama • Venn Şeması Analiz Platformu</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -37,16 +37,16 @@
       </div>
       <div>
         <h1 class="brand-title">VennFlow <span class="badge-accent">AI Platform</span></h1>
-        <p class="brand-subtitle">Excel Kıyaslama • Venn Şeması Analizi • ASELSAN LLM Suite Flow Entegrasyonu</p>
+        <p class="brand-subtitle">Excel & Metin Kıyaslama • Venn Şeması Analizi • Yerel ML & ASELSAN AselixAI</p>
       </div>
     </div>
 
     <div class="header-actions">
-      <div class="flow-status-pill" id="flowStatusPill" title="ASELSAN LLM Suite Flow Bağlantı Durumu">
+      <div class="flow-status-pill" id="engineStatusPill" title="Çalışma Modu">
         <span class="status-dot online"></span>
-        <span class="status-label">LLM Suite Flow</span>
+        <span class="status-label" id="engineStatusLabel">⚡ Yerel ML (Çevrimdışı)</span>
       </div>
-      <button class="btn btn-secondary btn-icon" id="btnOpenSettings" title="API ve Flow Ayarları">
+      <button class="btn btn-secondary btn-icon" id="btnOpenSettings" title="AselixAI API ve Ağ Ayarları">
         <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"></circle>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
@@ -60,86 +60,222 @@
           <line x1="16" y1="13" x2="8" y2="13"></line>
           <line x1="16" y1="17" x2="8" y2="17"></line>
         </svg>
-        <span>Swagger / API</span>
+        <span>Swagger API</span>
       </a>
     </div>
   </header>
 
   <!-- Main Container -->
   <main class="app-main">
-    <!-- Top Step: Drag and Drop Uploaders -->
+    <!-- Engine & Mode Config Card -->
+    <section class="config-bar-section">
+      <div class="config-bar-card">
+        <!-- Engine Selector -->
+        <div class="engine-selector-group">
+          <span class="config-label">Analiz Motoru:</span>
+          <div class="segmented-control" id="engineSegmentedControl">
+            <button class="segment-btn active" data-engine="local" id="btnEngineLocal">
+              <span class="engine-icon">⚡</span>
+              <span>Yerel ML (Çevrimdışı Mesafe)</span>
+            </button>
+            <button class="segment-btn" data-engine="aselix" id="btnEngineAselix">
+              <span class="engine-icon">🤖</span>
+              <span>AselixAI API + Kök Neden Analizi</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Similarity Threshold Slider -->
+        <div class="threshold-slider-group">
+          <div class="slider-header">
+            <span class="config-label">Benzerlik Eşiği (Distance):</span>
+            <span class="threshold-badge" id="thresholdValueBadge">%80</span>
+          </div>
+          <div class="slider-wrapper">
+            <input type="range" id="thresholdSlider" min="50" max="100" value="80" step="1" class="custom-slider">
+            <div class="slider-ticks">
+              <span>%50 (Geniş)</span>
+              <span>%80 (Önerilen)</span>
+              <span>%100 (Birebir)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Selected Model Pill -->
+        <div class="active-model-pill" id="activeModelPill">
+          <span class="model-tag">Model:</span>
+          <span class="model-name" id="currentModelDisplay">aselix-llm-v1</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 1: Input Tabs & Data Entry -->
     <section class="upload-section">
       <div class="section-heading">
         <div class="step-num">1</div>
-        <div>
-          <h2>Kıyaslanacak Excel Belgelerini Yükleyin</h2>
-          <p>İki ayrı Excel (.xlsx) dosyasını sürükleyip bırakın veya seçin. Sistem otomatik olarak uygunsuzluk sütunlarını eşleyecektir.</p>
+        <div class="heading-content-row">
+          <div>
+            <h2>Kıyaslanacak Verileri Girin</h2>
+            <p>İki ayrı Excel dosyası yükleyebilir veya satır bazlı metin yapıştırarak anında kıyaslayabilirsiniz.</p>
+          </div>
+          <!-- Input Mode Tabs -->
+          <div class="input-tabs-nav">
+            <button class="input-tab-btn active" id="tabBtnExcel" data-target="tabContentExcel">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+              </svg>
+              <span>Excel Dosyaları (.xlsx)</span>
+            </button>
+            <button class="input-tab-btn" id="tabBtnPaste" data-target="tabContentPaste">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span>Kopyala / Yapıştır (Copy-Paste)</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      <div class="dropzone-grid">
-        <!-- Dropzone 1 -->
-        <div class="dropzone-card" id="dropzone1">
-          <input type="file" id="fileInput1" accept=".xlsx,.xls,.xlsm" hidden>
-          <div class="dropzone-content" id="dropzoneContent1">
-            <div class="drop-icon file-a">
-              <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="12" y1="18" x2="12" y2="12"></line>
-                <line x1="9" y1="15" x2="12" y2="12"></line>
-                <line x1="15" y1="15" x2="12" y2="12"></line>
-              </svg>
-            </div>
-            <div class="drop-badge badge-blue">1. Belge (Referans / Eski / Faz A)</div>
-            <p class="drop-text">Excel dosyasını <strong>buraya sürükleyin</strong> veya tıklayarak seçin</p>
-            <span class="drop-hint">.xlsx, .xls (Örn: Hazirlik_Testi.xlsx)</span>
-          </div>
-          <!-- File Details (hidden initially) -->
-          <div class="file-loaded-view" id="fileView1" style="display: none;">
-            <div class="file-meta">
-              <span class="file-ext">XLSX</span>
-              <div>
-                <h4 class="file-name" id="fileName1">dosya1.xlsx</h4>
-                <p class="file-sub" id="fileSub1">0 KB • Okundu</p>
+      <!-- TAB 1: EXCEL DOSYA YÜKLEME -->
+      <div class="tab-pane active" id="tabContentExcel">
+        <div class="dropzone-grid">
+          <!-- Dropzone 1 -->
+          <div class="dropzone-column">
+            <div class="dropzone-card" id="dropzone1">
+              <input type="file" id="fileInput1" accept=".xlsx,.xls,.xlsm" hidden>
+              <div class="dropzone-content" id="dropzoneContent1">
+                <div class="drop-icon file-a">
+                  <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="12" y2="12"></line>
+                    <line x1="15" y1="15" x2="12" y2="12"></line>
+                  </svg>
+                </div>
+                <div class="drop-badge badge-blue">1. Belge (Referans / Eski / Faz A)</div>
+                <p class="drop-text">Excel dosyasını <strong>buraya sürükleyin</strong> veya tıklayın</p>
+                <span class="drop-hint">.xlsx, .xls</span>
+              </div>
+              <!-- File Details (shown after selection) -->
+              <div class="file-loaded-view" id="fileView1" style="display: none;">
+                <div class="file-meta">
+                  <span class="file-ext">XLSX</span>
+                  <div>
+                    <h4 class="file-name" id="fileName1">dosya1.xlsx</h4>
+                    <p class="file-sub" id="fileSub1">0 KB • 0 satır</p>
+                  </div>
+                </div>
+                <button class="btn-remove" id="btnRemoveFile1" title="Dosyayı Kaldır">&times;</button>
               </div>
             </div>
-            <button class="btn-remove" id="btnRemoveFile1" title="Dosyayı Kaldır">&times;</button>
-          </div>
-        </div>
 
-        <!-- VS Divider -->
-        <div class="vs-divider">
-          <span>VS</span>
-        </div>
-
-        <!-- Dropzone 2 -->
-        <div class="dropzone-card" id="dropzone2">
-          <input type="file" id="fileInput2" accept=".xlsx,.xls,.xlsm" hidden>
-          <div class="dropzone-content" id="dropzoneContent2">
-            <div class="drop-icon file-b">
-              <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="12" y1="18" x2="12" y2="12"></line>
-                <line x1="9" y1="15" x2="12" y2="12"></line>
-                <line x1="15" y1="15" x2="12" y2="12"></line>
-              </svg>
+            <!-- Column Selector for File 1 -->
+            <div class="column-pick-box" id="colPickBox1" style="display: none;">
+              <div class="column-pick-header">
+                <label for="colSelect1">Kıyaslanacak Sütun (1. Belge):</label>
+                <button class="btn-text-preview" id="btnTogglePreview1">👁️ İlk 5 Satırı Göster</button>
+              </div>
+              <select id="colSelect1" class="form-select"></select>
             </div>
-            <div class="drop-badge badge-purple">2. Belge (Kıyaslanan / Yeni / Faz B)</div>
-            <p class="drop-text">Excel dosyasını <strong>buraya sürükleyin</strong> veya tıklayarak seçin</p>
-            <span class="drop-hint">.xlsx, .xls (Örn: Saha_Kabul.xlsx)</span>
-          </div>
-          <!-- File Details (hidden initially) -->
-          <div class="file-loaded-view" id="fileView2" style="display: none;">
-            <div class="file-meta">
-              <span class="file-ext">XLSX</span>
-              <div>
-                <h4 class="file-name" id="fileName2">dosya2.xlsx</h4>
-                <p class="file-sub" id="fileSub2">0 KB • Okundu</p>
+
+            <!-- First 5 Rows Preview Container 1 -->
+            <div class="preview-table-card" id="previewCard1" style="display: none;">
+              <div class="preview-card-header">
+                <span class="preview-title">📊 1. Belge: İlk 5 Satır Önizleme</span>
+                <span class="preview-badge" id="previewRowCountBadge1">Toplam 0 Satır</span>
+              </div>
+              <div class="preview-table-scroll" id="previewTableScroll1">
+                <!-- Dynamically rendered table -->
               </div>
             </div>
-            <button class="btn-remove" id="btnRemoveFile2" title="Dosyayı Kaldır">&times;</button>
+          </div>
+
+          <!-- VS Divider -->
+          <div class="vs-divider">
+            <span>VS</span>
+          </div>
+
+          <!-- Dropzone 2 -->
+          <div class="dropzone-column">
+            <div class="dropzone-card" id="dropzone2">
+              <input type="file" id="fileInput2" accept=".xlsx,.xls,.xlsm" hidden>
+              <div class="dropzone-content" id="dropzoneContent2">
+                <div class="drop-icon file-b">
+                  <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="12" y2="12"></line>
+                    <line x1="15" y1="15" x2="12" y2="12"></line>
+                  </svg>
+                </div>
+                <div class="drop-badge badge-purple">2. Belge (Kıyaslanan / Yeni / Faz B)</div>
+                <p class="drop-text">Excel dosyasını <strong>buraya sürükleyin</strong> veya tıklayın</p>
+                <span class="drop-hint">.xlsx, .xls</span>
+              </div>
+              <!-- File Details (shown after selection) -->
+              <div class="file-loaded-view" id="fileView2" style="display: none;">
+                <div class="file-meta">
+                  <span class="file-ext">XLSX</span>
+                  <div>
+                    <h4 class="file-name" id="fileName2">dosya2.xlsx</h4>
+                    <p class="file-sub" id="fileSub2">0 KB • 0 satır</p>
+                  </div>
+                </div>
+                <button class="btn-remove" id="btnRemoveFile2" title="Dosyayı Kaldır">&times;</button>
+              </div>
+            </div>
+
+            <!-- Column Selector for File 2 -->
+            <div class="column-pick-box" id="colPickBox2" style="display: none;">
+              <div class="column-pick-header">
+                <label for="colSelect2">Kıyaslanacak Sütun (2. Belge):</label>
+                <button class="btn-text-preview" id="btnTogglePreview2">👁️ İlk 5 Satırı Göster</button>
+              </div>
+              <select id="colSelect2" class="form-select"></select>
+            </div>
+
+            <!-- First 5 Rows Preview Container 2 -->
+            <div class="preview-table-card" id="previewCard2" style="display: none;">
+              <div class="preview-card-header">
+                <span class="preview-title">📊 2. Belge: İlk 5 Satır Önizleme</span>
+                <span class="preview-badge" id="previewRowCountBadge2">Toplam 0 Satır</span>
+              </div>
+              <div class="preview-table-scroll" id="previewTableScroll2">
+                <!-- Dynamically rendered table -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: METİN KOPYALA / YAPIŞTIR -->
+      <div class="tab-pane" id="tabContentPaste" style="display: none;">
+        <div class="paste-grid">
+          <!-- Textarea 1 -->
+          <div class="paste-card">
+            <div class="paste-card-header">
+              <div class="drop-badge badge-blue">1. Veri Grubu (Referans / Faz A)</div>
+              <span class="line-counter-badge" id="lineCount1">0 satır</span>
+            </div>
+            <textarea id="textPaste1" class="paste-textarea" placeholder="1. gruptaki uygunsuzlukları veya Excel'den kopyalanan hücreleri buraya yapıştırın... (Her satır ayrı bir kayıt olarak kıyaslanır)"></textarea>
+          </div>
+
+          <!-- Divider -->
+          <div class="vs-divider">
+            <span>VS</span>
+          </div>
+
+          <!-- Textarea 2 -->
+          <div class="paste-card">
+            <div class="paste-card-header">
+              <div class="drop-badge badge-purple">2. Veri Grubu (Kıyaslanan / Faz B)</div>
+              <span class="line-counter-badge" id="lineCount2">0 satır</span>
+            </div>
+            <textarea id="textPaste2" class="paste-textarea" placeholder="2. gruptaki uygunsuzlukları veya Excel'den kopyalanan hücreleri buraya yapıştırın... (Her satır ayrı bir kayıt olarak kıyaslanır)"></textarea>
           </div>
         </div>
       </div>
@@ -147,22 +283,17 @@
       <!-- Action & Controls Bar -->
       <div class="action-bar">
         <div class="action-left">
-          <label class="custom-input-label" for="colMatchSelect">
-            <span>Karşılaştırılacak Sütun:</span>
-            <select id="colMatchSelect" class="form-select">
-              <option value="auto">⚡ Otomatik Algıla (Uygunsuzluk / Açıklama / Tanım)</option>
-            </select>
-          </label>
-          <button class="btn btn-ghost btn-sm" id="btnUseSampleFiles" title="Klasördeki örnek uygunsuzluk verilerini test etmek için yükle">
+          <button class="btn btn-ghost btn-sm" id="btnUseSampleFiles" title="Hazır örnek uygunsuzluk verilerini yükle">
             📂 Örnek Veri ile Dene
           </button>
+          <span class="action-hint" id="actionHintText">İki veri setini seçin veya yapıştırın ve analizi başlatın.</span>
         </div>
 
         <button class="btn btn-primary btn-lg pulse-glow" id="btnRunComparison">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
             <polygon points="5 3 19 12 5 21 5 3"></polygon>
           </svg>
-          <span>Flow'a Gönder & Venn Şemasını Çiz</span>
+          <span id="btnRunText">Kıyasla & Venn Şemasını Çiz</span>
         </button>
       </div>
 
@@ -170,189 +301,182 @@
       <div class="progress-banner" id="progressBanner" style="display: none;">
         <div class="spinner"></div>
         <div class="progress-details">
-          <h4 id="progressStatusText">Excel dosyaları okunuyor ve küme analizi yapılıyor...</h4>
-          <p id="progressSubText">ASELSAN LLM Suite Flow API (`POST /api/v1/run`) çağrılıyor...</p>
+          <h4 id="progressStatusText">Veriler analiz ediliyor ve mesafe hesaplanıyor...</h4>
+          <p id="progressSubText">Yerel ML benzerlik eşleştirmesi yürütülüyor...</p>
         </div>
       </div>
     </section>
 
     <!-- Results Section (Visible after comparison) -->
     <section class="results-section" id="resultsSection" style="display: none;">
-      <!-- Key Metric Cards -->
-      <div class="metrics-grid">
-        <div class="metric-card card-file-a" id="metricCardA">
-          <div class="metric-header">
-            <span class="metric-indicator bg-blue"></span>
-            <span class="metric-label" id="labelDocA">Yalnızca 1. Belgede</span>
-          </div>
-          <div class="metric-value" id="valOnlyA">0</div>
-          <p class="metric-desc">Yalnızca ilk dosyaya özgü, 2. dosyada bulunmayan uygunsuzluklar.</p>
-        </div>
-
-        <div class="metric-card card-common active-highlight" id="metricCardCommon">
-          <div class="metric-header">
-            <span class="metric-indicator bg-indigo"></span>
-            <span class="metric-label">Ortak Kesişim (Her İkisinde)</span>
-          </div>
-          <div class="metric-value" id="valCommon">0</div>
-          <p class="metric-desc">Her iki dosyada da tekrarlayan, kronik ortak uygunsuzluklar.</p>
-        </div>
-
-        <div class="metric-card card-file-b" id="metricCardB">
-          <div class="metric-header">
-            <span class="metric-indicator bg-pink"></span>
-            <span class="metric-label" id="labelDocB">Yalnızca 2. Belgede</span>
-          </div>
-          <div class="metric-value" id="valOnlyB">0</div>
-          <p class="metric-desc">Yeni ortaya çıkan, ilk dosyada görülmemiş yeni uygunsuzluklar.</p>
-        </div>
-
-        <div class="metric-card card-similarity">
-          <div class="metric-header">
-            <span class="metric-indicator bg-emerald"></span>
-            <span class="metric-label">Jaccard Benzerlik Oranı</span>
-          </div>
-          <div class="metric-value" id="valSimilarity">%0</div>
-          <p class="metric-desc" id="valTotalUnique">Toplam 0 benzersiz uygunsuzluk analiz edildi.</p>
+      <div class="section-heading">
+        <div class="step-num">2</div>
+        <div>
+          <h2>Kıyaslama ve Venn Analiz Sonuçları</h2>
+          <p id="resultsSubTitle">Venn şeması küme matematiği ve benzerlik eşleme detayları.</p>
         </div>
       </div>
 
-      <!-- Main Visuals & AI Analysis Row -->
+      <!-- Executive Summary Card -->
+      <div class="summary-card" id="summaryCard">
+        <div class="summary-card-header">
+          <div class="summary-badge" id="summaryEngineBadge">
+            <span class="engine-icon">⚡</span>
+            <span>Yerel ML Analiz Özeti</span>
+          </div>
+          <button class="btn-copy-summary" id="btnCopySummary" title="Özeti Kopyala">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span>Kopyala</span>
+          </button>
+        </div>
+        <div class="summary-text" id="summaryText">
+          Analiz bekleniyor...
+        </div>
+      </div>
+
+      <!-- Venn & Metrics 2-Column Grid -->
       <div class="analysis-grid">
         <!-- Left: Interactive Venn Diagram -->
         <div class="panel-card venn-panel">
           <div class="panel-header">
-            <div class="panel-title">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="9" cy="12" r="6"></circle>
-                <circle cx="15" cy="12" r="6"></circle>
-              </svg>
-              <h3>İnteraktif Venn Şeması</h3>
-            </div>
-            <div class="panel-tags">
-              <span class="tag-hint">Bölgelere tıklayarak aşağıdaki tabloyu filtreleyin</span>
-            </div>
+            <h3>İnteraktif Venn Şeması</h3>
+            <span class="panel-meta">Bölgelere tıklayarak tabloyu filtreleyin</span>
           </div>
-
-          <div class="venn-canvas-container">
-            <!-- Dynamic SVG Venn Diagram will be injected here -->
-            <svg id="vennSvg" viewBox="0 0 640 400" width="100%" height="100%">
-              <!-- Rendered via JavaScript -->
-            </svg>
+          <div class="venn-container" id="vennContainer">
+            <!-- Dynamic SVG Venn Diagram injected here -->
           </div>
-
-          <!-- Venn Legend & Filters -->
           <div class="venn-legend">
-            <button class="legend-btn active" data-filter="all" id="btnFilterAll">
-              <span class="legend-color all"></span>
-              <span>Tüm Liste (<span id="countAll">0</span>)</span>
-            </button>
-            <button class="legend-btn" data-filter="only_a" id="btnFilterOnlyA">
-              <span class="legend-color file-a"></span>
-              <span id="legendTitleA">Sadece 1. Belge</span> (<span id="countOnlyA">0</span>)
-            </button>
-            <button class="legend-btn" data-filter="common" id="btnFilterCommon">
-              <span class="legend-color common"></span>
-              <span>Ortak Kesişim (<span id="countCommon">0</span>)</span>
-            </button>
-            <button class="legend-btn" data-filter="only_b" id="btnFilterOnlyB">
-              <span class="legend-color file-b"></span>
-              <span id="legendTitleB">Sadece 2. Belge</span> (<span id="countOnlyB">0</span>)
-            </button>
+            <div class="legend-item legend-blue" id="legendA">
+              <span class="legend-dot"></span>
+              <span class="legend-text" id="legendTextA">1. Belge</span>
+            </div>
+            <div class="legend-item legend-overlap" id="legendIntersection">
+              <span class="legend-dot"></span>
+              <span class="legend-text">Ortak Kesişim</span>
+            </div>
+            <div class="legend-item legend-purple" id="legendB">
+              <span class="legend-dot"></span>
+              <span class="legend-text" id="legendTextB">2. Belge</span>
+            </div>
           </div>
         </div>
 
-        <!-- Right: Flow AI Executive Summary -->
-        <div class="panel-card ai-summary-panel">
-          <div class="panel-header">
-            <div class="panel-title">
-              <div class="ai-badge-icon">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 14h-2v-4h2zm0-6h-2V8h2z"></path>
-                </svg>
-              </div>
-              <div>
-                <h3>ASELSAN LLM Suite Analiz Özeti</h3>
-                <span class="panel-meta" id="flowModelMeta">Flow ID: c16ecc83... • Doğrudan Model Çıktısı</span>
-              </div>
+        <!-- Right: Stat Metrics Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card metric-total">
+            <div class="metric-icon">🔢</div>
+            <div class="metric-data">
+              <span class="metric-value" id="statTotal">0</span>
+              <span class="metric-label">Toplam Benzersiz Uygunsuzluk</span>
             </div>
-            <button class="btn btn-ghost btn-sm" id="btnCopyAiSummary" title="Özeti Kopyala">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              <span>Kopyala</span>
-            </button>
           </div>
 
-          <div class="ai-summary-content markdown-body" id="aiSummaryBody">
-            <p class="placeholder-text">Yapay zeka analizi yükleniyor...</p>
+          <div class="metric-card metric-overlap" id="cardIntersection">
+            <div class="metric-icon">🔄</div>
+            <div class="metric-data">
+              <span class="metric-value" id="statIntersection">0</span>
+              <span class="metric-label">Ortak Kesişim (Her İkisinde de Var)</span>
+              <span class="metric-sub" id="statJaccard">Jaccard Benzerlik: %0</span>
+            </div>
           </div>
 
-          <div class="ai-summary-footer">
-            <span class="footer-tip">💡 Aşağıdaki Chatbot alanından bu kıyaslama hakkında soru sormaya devam edebilirsiniz.</span>
+          <div class="metric-card metric-a" id="cardOnlyA">
+            <div class="metric-icon">🔵</div>
+            <div class="metric-data">
+              <span class="metric-value" id="statOnlyA">0</span>
+              <span class="metric-label">Yalnızca 1. Belgede (Çözülenler)</span>
+              <span class="metric-sub" id="statOnlyASub">2. belgede tekrarlanmadı</span>
+            </div>
+          </div>
+
+          <div class="metric-card metric-b" id="cardOnlyB">
+            <div class="metric-icon">🟣</div>
+            <div class="metric-data">
+              <span class="metric-value" id="statOnlyB">0</span>
+              <span class="metric-label">Yalnızca 2. Belgede (Yeni Hatalar)</span>
+              <span class="metric-sub" id="statOnlyBSub">İlk kez 2. belgede görüldü</span>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Data Details Table Section -->
+      <!-- Tabbed Item Details & Matched Pairs Table -->
       <div class="panel-card details-table-panel">
-        <div class="panel-header">
-          <div class="panel-title">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="8" y1="6" x2="21" y2="6"></line>
-              <line x1="8" y1="12" x2="21" y2="12"></line>
-              <line x1="8" y1="18" x2="21" y2="18"></line>
-              <line x1="3" y1="6" x2="3.01" y2="6"></line>
-              <line x1="3" y1="12" x2="3.01" y2="12"></line>
-              <line x1="3" y1="18" x2="3.01" y2="18"></line>
-            </svg>
-            <h3 id="tableHeading">Kayıt Detayları ve Uygunsuzluklar</h3>
+        <div class="table-controls-bar">
+          <div class="filter-tabs">
+            <button class="filter-tab-btn active" data-filter="all" id="tabFilterAll">
+              Tümü (<span id="countAll">0</span>)
+            </button>
+            <button class="filter-tab-btn tab-overlap" data-filter="intersection" id="tabFilterIntersection">
+              Ortak Kesişim (<span id="countIntersection">0</span>)
+            </button>
+            <button class="filter-tab-btn tab-a" data-filter="only_a" id="tabFilterA">
+              Yalnızca 1. Belge (<span id="countA">0</span>)
+            </button>
+            <button class="filter-tab-btn tab-b" data-filter="only_b" id="tabFilterB">
+              Yalnızca 2. Belge (<span id="countB">0</span>)
+            </button>
           </div>
-          <div class="table-search-bar">
-            <input type="text" id="tableSearchInput" placeholder="Uygunsuzluk metninde ara..." class="form-input">
-            <button class="btn btn-secondary btn-sm" id="btnExportCsv">
+
+          <div class="table-actions">
+            <div class="search-input-wrapper">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
               </svg>
-              <span>Dışa Aktar (.csv)</span>
+              <input type="text" id="tableSearchInput" placeholder="Kayıtlar içinde ara..." class="search-input">
+            </div>
+            <button class="btn btn-secondary btn-sm" id="btnExportCSV" title="Tabloyu CSV Olarak İndir">
+              ⬇️ CSV
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btnExportJSON" title="Tabloyu JSON Olarak İndir">
+              ⬇️ JSON
             </button>
           </div>
         </div>
 
-        <div class="table-wrapper">
-          <table class="data-table">
+        <div class="table-responsive">
+          <table class="data-table" id="detailsDataTable">
             <thead>
               <tr>
-                <th style="width: 70px;">#</th>
-                <th style="width: 180px;">Durum Kümesi</th>
-                <th>Uygunsuzluk / Açıklama Tanımı</th>
-                <th style="width: 140px;">Kaynak</th>
+                <th style="width: 50px;">#</th>
+                <th>1. Belge / Veri Kaydı</th>
+                <th>2. Belge Eşleşen Karşılığı</th>
+                <th style="width: 170px;">Benzerlik / Durum</th>
               </tr>
             </thead>
-            <tbody id="tableBody">
-              <tr>
-                <td colspan="4" class="text-center text-muted">Henüz veri yüklenmedi.</td>
-              </tr>
+            <tbody id="detailsTableBody">
+              <!-- Dynamically populated rows -->
             </tbody>
           </table>
         </div>
       </div>
+    </section>
 
-      <!-- Integrated Flow AI Chatbot Section -->
-      <div class="panel-card chat-panel" id="chatSection">
-        <div class="panel-header">
-          <div class="panel-title">
-            <div class="chat-badge-avatar">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+    <!-- Step 3: AI Chat Assistant Section -->
+    <section class="chat-section" id="chatSection">
+      <div class="section-heading">
+        <div class="step-num">3</div>
+        <div>
+          <h2>Yapay Zeka Asistanı ile Kıyaslama Üzerine Konuşun</h2>
+          <p>Kıyaslanan iki veri setindeki riskler, kök nedenler veya aksiyon önerileri hakkında soru sorun.</p>
+        </div>
+      </div>
+
+      <div class="chat-card">
+        <div class="chat-header">
+          <div class="chat-header-info">
+            <div class="chat-avatar">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
               </svg>
             </div>
             <div>
-              <h3>ASELSAN LLM Suite Chat Asistanı</h3>
-              <p class="panel-meta">Kıyaslanan iki Excel verisi üzerinde serbestçe sohbet edin, soru sorun ve aksiyon planı isteyin.</p>
+              <h3>ASELSAN AselixAI Chat Asistanı</h3>
+              <p class="panel-meta">Seçili Model: <span id="chatModelNameDisplay">aselix-llm-v1</span></p>
             </div>
           </div>
           <button class="btn btn-ghost btn-sm" id="btnClearChat" title="Sohbeti Temizle">
@@ -360,20 +484,20 @@
           </button>
         </div>
 
-        <!-- Preset Suggestion Chips -->
+        <!-- Suggestion Question Chips -->
         <div class="chat-chips-bar">
           <span class="chips-title">Hızlı Sorular:</span>
-          <button class="chip-btn" data-query="Ortak kesişimde bulunan uygunsuzluklardan en yüksek risk taşıyanları listele ve kök nedenlerini analiz et.">
-            ⚠️ Ortak Kesişimdeki Riskler
+          <button class="chip-btn" data-query="Ortak kesişimde bulunan uygunsuzluklardan en kritik olanların kök neden risk analizini yap.">
+            ⚠️ Ortak Riskler
           </button>
           <button class="chip-btn" data-query="2. dosyada ilk kez ortaya çıkan yeni uygunsuzluklar için bir önleyici faaliyet planı hazırla.">
             🆕 Yeni Ortaya Çıkan Hatalar
           </button>
-          <button class="chip-btn" data-query="1. dosyada olup 2. dosyada çözülmüş görünen uygunsuzlukların başarı oranını ve trendini özetle.">
-            ✅ Çözülen Hataların Trendi
+          <button class="chip-btn" data-query="1. dosyada olup 2. dosyada çözülmüş görünen uygunsuzlukların başarı oranını özetle.">
+            ✅ Çözülen Hataların Başarısı
           </button>
-          <button class="chip-btn" data-query="Bu iki test fazı arasındaki Jaccard benzerlik oranını yorumla ve kalite ekibine 3 somut tavsiye ver.">
-            🎯 Kalite Ekibi Tavsiyeleri
+          <button class="chip-btn" data-query="Bu iki test fazı arasındaki benzerlik oranını yorumla ve kalite ekibine 3 somut tavsiye ver.">
+            🎯 Kalite Ekibi Aksiyonları
           </button>
         </div>
 
@@ -382,7 +506,7 @@
           <div class="chat-msg bot-msg">
             <div class="msg-avatar">🤖</div>
             <div class="msg-bubble">
-              <p>Merhaba! İki Excel dosyanızın Venn şeması küme analizi tamamlandı. Bu verilerle ilgili merak ettiğiniz detayları, kök neden değerlendirmelerini veya çözüm önerilerini bana sorabilirsiniz.</p>
+              <p>Merhaba! Kıyaslama verileriniz hazır olduğunda ortak kesişimler, tekrarlayan kronik hatalar ve kalite tavsiyeleri hakkında bana dilediğiniz soruyu sorabilirsiniz.</p>
             </div>
           </div>
         </div>
@@ -401,47 +525,85 @@
     </section>
   </main>
 
-  <!-- Settings Modal -->
+  <!-- Settings Modal (Aselsan Endpoints, Models & API Key) -->
   <div class="modal-backdrop" id="settingsModal" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <h3>ASELSAN LLM Suite Flow Bağlantı Ayarları</h3>
+        <h3>ASELSAN AselixAI API ve Ağ Ayarları</h3>
         <button class="btn-close" id="btnCloseSettings">&times;</button>
       </div>
       <div class="modal-body">
         <p class="modal-desc">
-          Bu arayüz, belirttiğiniz ASELSAN LLM Suite Flow API'sine doğrudan bağlanarak Excel kıyaslamalarını ve chatbot yanıtlarını alır.
+          ASELSAN kurumsal intranet ağınıza göre uygun endpointi seçebilir veya modelleri listeleyebilirsiniz.
         </p>
 
+        <!-- Network Selection Radios -->
         <div class="form-group">
-          <label for="cfgBaseUrl">Base URL (API Uç Noktası):</label>
-          <input type="text" id="cfgBaseUrl" class="form-input" value="https://llmsuiteflow.aiplatform.aselsan.com.tr">
-          <small class="form-help">Varsayılan: https://llmsuiteflow.aiplatform.aselsan.com.tr</small>
+          <label class="form-group-label">Ağ / Uç Nokta Seçimi:</label>
+          <div class="network-radio-group">
+            <label class="radio-card">
+              <input type="radio" name="networkChoice" value="milli" checked id="radioMilli">
+              <div class="radio-content">
+                <span class="radio-title">🌐 Milli Ağ (Varsayılan)</span>
+                <span class="radio-url">https://api.aselixai.aselsan.com.tr/v1</span>
+              </div>
+            </label>
+
+            <label class="radio-card">
+              <input type="radio" name="networkChoice" value="aynet" id="radioAynet">
+              <div class="radio-content">
+                <span class="radio-title">🏢 Aynet Ağı</span>
+                <span class="radio-url">https://agate.aselsan.com.tr/send/milli/api.aselixai/v1</span>
+              </div>
+            </label>
+
+            <label class="radio-card">
+              <input type="radio" name="networkChoice" value="custom" id="radioCustom">
+              <div class="radio-content">
+                <span class="radio-title">⚙️ Özel / Harici URL</span>
+                <span class="radio-url">Özel base url adresi girin</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" id="groupCustomBaseUrl">
+          <label for="cfgBaseUrl">Aktif Base URL:</label>
+          <input type="text" id="cfgBaseUrl" class="form-input" value="https://api.aselixai.aselsan.com.tr/v1">
         </div>
 
         <div class="form-group">
-          <label for="cfgFlowId">Flow ID:</label>
-          <input type="text" id="cfgFlowId" class="form-input" value="c16ecc83-ff64-4fc7-bb52-0f594beaf70a">
-          <small class="form-help">Ekran görüntünüzdeki flow id: c16ecc83-ff64-4fc7-bb52-0f594beaf70a</small>
-        </div>
-
-        <div class="form-group">
-          <label for="cfgApiKey">API Key (x-api-key):</label>
+          <label for="cfgApiKey">API Key:</label>
           <div class="password-input-row">
-            <input type="password" id="cfgApiKey" class="form-input" placeholder="API Anahtarınızı girin...">
+            <input type="password" id="cfgApiKey" class="form-input" placeholder="AselixAI API Anahtarınızı girin...">
             <button class="btn btn-secondary btn-sm" id="btnToggleApiKey">Göster</button>
           </div>
-          <small class="form-help">API anahtarı yalnızca tarayıcınızın yerel hafızasında (localStorage) güvenle saklanır.</small>
+          <small class="form-help">API anahtarı yalnızca tarayıcınızın yerel depolama alanında (localStorage) güvenle saklanır.</small>
         </div>
 
+        <!-- Model Selection & Fetch Button -->
         <div class="form-group">
-          <label for="cfgTweaksInput">ChatInput Bileşen Adı (Opsiyonel):</label>
-          <input type="text" id="cfgTweaksInput" class="form-input" placeholder="Standart akış için boş bırakın" value="">
-          <small class="form-help">Görselinizdeki standart Chat Input için boş bırakılması önerilir. Yalnızca özel bir dosya bileşeni ID'niz varsa girin.</small>
+          <div class="model-select-header">
+            <label for="cfgModelSelect">Kullanılacak Model:</label>
+            <button class="btn btn-secondary btn-sm" id="btnFetchModels" title="API üzerinden GET /models çağrısı yap">
+              🔄 Modelleri Listele / Getir
+            </button>
+          </div>
+          <select id="cfgModelSelect" class="form-select">
+            <option value="aselix-llm-v1">aselix-llm-v1 (Varsayılan)</option>
+            <option value="aselix-chat-default">aselix-chat-default</option>
+            <option value="llama-3-8b-instruct">llama-3-8b-instruct</option>
+            <option value="mistral-7b-instruct">mistral-7b-instruct</option>
+            <option value="qwen-2.5-7b-instruct">qwen-2.5-7b-instruct</option>
+          </select>
+          <div id="fetchModelsStatus" style="display: none; margin-top: 8px; font-size: 12px; padding: 6px 10px; border-radius: 6px;"></div>
+        </div>
+
         <div id="testConnResult" style="display: none; padding: 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; margin-top: 10px;"></div>
       </div>
+
       <div class="modal-footer" style="display: flex; justify-content: space-between;">
-        <button class="btn btn-secondary btn-sm" id="btnTestConn">⚡ Bağlantıyı Test Et</button>
+        <button class="btn btn-secondary btn-sm" id="btnTestConn">⚡ API Testi Yap</button>
         <div style="display: flex; gap: 8px;">
           <button class="btn btn-secondary btn-sm" id="btnResetSettings">Varsayılana Sıfırla</button>
           <button class="btn btn-primary btn-sm" id="btnSaveSettings">Kaydet & Kapat</button>

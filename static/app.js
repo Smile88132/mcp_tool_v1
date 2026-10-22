@@ -1,27 +1,55 @@
 /**
  * VennFlow AI - Client Application Logic
- * Drag & Drop, Interactive SVG Venn Diagram, ASELSAN LLM Suite Flow API Client
+ * Dual-Mode (Offline Local ML vs AselixAI API), Excel 5-Row Preview & Column Picker,
+ * Copy-Paste Multi-Row Comparison, Interactive SVG Venn Diagram & QA Assistant.
  */
 
 (function () {
   'use strict';
 
   // Config State (LocalStorage backed)
+  const STORAGE_KEY = 'vennflow_aselix_config_v2';
   const DEFAULT_CONFIG = {
-    baseUrl: 'https://llmsuiteflow.aiplatform.aselsan.com.tr',
-    flowId: 'c16ecc83-ff64-4fc7-bb52-0f594beaf70a',
+    network: 'milli',
+    baseUrl: 'https://api.aselixai.aselsan.com.tr/v1',
     apiKey: '',
-    tweaksInput: ''
+    model: 'aselix-llm-v1',
+    engine: 'local', // 'local' or 'aselix'
+    threshold: 80,   // %50 - %100
+    inputMode: 'excel' // 'excel' or 'paste'
   };
 
   let appConfig = loadConfig();
   let file1 = null;
   let file2 = null;
+  let previewData1 = null;
+  let previewData2 = null;
   let currentAnalysis = null;
   let currentFilter = 'all';
-  let activeSessionId = null;
+
+  // Network URLs mapping
+  const NETWORK_URLS = {
+    milli: 'https://api.aselixai.aselsan.com.tr/v1',
+    aynet: 'https://agate.aselsan.com.tr/send/milli/api.aselixai/v1'
+  };
 
   // DOM Elements
+  const engineStatusPill = document.getElementById('engineStatusPill');
+  const engineStatusLabel = document.getElementById('engineStatusLabel');
+  const btnEngineLocal = document.getElementById('btnEngineLocal');
+  const btnEngineAselix = document.getElementById('btnEngineAselix');
+  const thresholdSlider = document.getElementById('thresholdSlider');
+  const thresholdValueBadge = document.getElementById('thresholdValueBadge');
+  const currentModelDisplay = document.getElementById('currentModelDisplay');
+  const chatModelNameDisplay = document.getElementById('chatModelNameDisplay');
+
+  // Input Tabs
+  const tabBtnExcel = document.getElementById('tabBtnExcel');
+  const tabBtnPaste = document.getElementById('tabBtnPaste');
+  const tabContentExcel = document.getElementById('tabContentExcel');
+  const tabContentPaste = document.getElementById('tabContentPaste');
+
+  // Excel Dropzones & Column Pickers
   const dropzone1 = document.getElementById('dropzone1');
   const dropzone2 = document.getElementById('dropzone2');
   const fileInput1 = document.getElementById('fileInput1');
@@ -37,44 +65,72 @@
   const btnRemoveFile1 = document.getElementById('btnRemoveFile1');
   const btnRemoveFile2 = document.getElementById('btnRemoveFile2');
 
+  const colPickBox1 = document.getElementById('colPickBox1');
+  const colPickBox2 = document.getElementById('colPickBox2');
+  const colSelect1 = document.getElementById('colSelect1');
+  const colSelect2 = document.getElementById('colSelect2');
+  const btnTogglePreview1 = document.getElementById('btnTogglePreview1');
+  const btnTogglePreview2 = document.getElementById('btnTogglePreview2');
+  const previewCard1 = document.getElementById('previewCard1');
+  const previewCard2 = document.getElementById('previewCard2');
+  const previewRowCountBadge1 = document.getElementById('previewRowCountBadge1');
+  const previewRowCountBadge2 = document.getElementById('previewRowCountBadge2');
+  const previewTableScroll1 = document.getElementById('previewTableScroll1');
+  const previewTableScroll2 = document.getElementById('previewTableScroll2');
+
+  // Copy-Paste Area
+  const textPaste1 = document.getElementById('textPaste1');
+  const textPaste2 = document.getElementById('textPaste2');
+  const lineCount1 = document.getElementById('lineCount1');
+  const lineCount2 = document.getElementById('lineCount2');
+
+  // Action Buttons
   const btnRunComparison = document.getElementById('btnRunComparison');
+  const btnRunText = document.getElementById('btnRunText');
   const btnUseSampleFiles = document.getElementById('btnUseSampleFiles');
   const progressBanner = document.getElementById('progressBanner');
   const progressStatusText = document.getElementById('progressStatusText');
   const progressSubText = document.getElementById('progressSubText');
+  const actionHintText = document.getElementById('actionHintText');
+
+  // Results Section
   const resultsSection = document.getElementById('resultsSection');
+  const resultsSubTitle = document.getElementById('resultsSubTitle');
+  const summaryEngineBadge = document.getElementById('summaryEngineBadge');
+  const summaryText = document.getElementById('summaryText');
+  const btnCopySummary = document.getElementById('btnCopySummary');
+  const vennContainer = document.getElementById('vennContainer');
 
   // Metrics
-  const valOnlyA = document.getElementById('valOnlyA');
-  const valCommon = document.getElementById('valCommon');
-  const valOnlyB = document.getElementById('valOnlyB');
-  const valSimilarity = document.getElementById('valSimilarity');
-  const valTotalUnique = document.getElementById('valTotalUnique');
-  const labelDocA = document.getElementById('labelDocA');
-  const labelDocB = document.getElementById('labelDocB');
-  const legendTitleA = document.getElementById('legendTitleA');
-  const legendTitleB = document.getElementById('legendTitleB');
+  const statTotal = document.getElementById('statTotal');
+  const statIntersection = document.getElementById('statIntersection');
+  const statJaccard = document.getElementById('statJaccard');
+  const statOnlyA = document.getElementById('statOnlyA');
+  const statOnlyASub = document.getElementById('statOnlyASub');
+  const statOnlyB = document.getElementById('statOnlyB');
+  const statOnlyBSub = document.getElementById('statOnlyBSub');
+  const legendTextA = document.getElementById('legendTextA');
+  const legendTextB = document.getElementById('legendTextB');
 
-  // Venn SVG
-  const vennSvg = document.getElementById('vennSvg');
+  // Table & Filters
   const countAll = document.getElementById('countAll');
-  const countOnlyA = document.getElementById('countOnlyA');
-  const countCommon = document.getElementById('countCommon');
-  const countOnlyB = document.getElementById('countOnlyB');
+  const countIntersection = document.getElementById('countIntersection');
+  const countA = document.getElementById('countA');
+  const countB = document.getElementById('countB');
+  const tabFilterAll = document.getElementById('tabFilterAll');
+  const tabFilterIntersection = document.getElementById('tabFilterIntersection');
+  const tabFilterA = document.getElementById('tabFilterA');
+  const tabFilterB = document.getElementById('tabFilterB');
+  const tableSearchInput = document.getElementById('tableSearchInput');
+  const detailsTableBody = document.getElementById('detailsTableBody');
+  const btnExportCSV = document.getElementById('btnExportCSV');
+  const btnExportJSON = document.getElementById('btnExportJSON');
 
-  // AI Summary & Chat
-  const aiSummaryBody = document.getElementById('aiSummaryBody');
-  const flowModelMeta = document.getElementById('flowModelMeta');
-  const btnCopyAiSummary = document.getElementById('btnCopyAiSummary');
+  // Chat Section
   const chatMessages = document.getElementById('chatMessages');
   const chatInput = document.getElementById('chatInput');
   const btnSendChat = document.getElementById('btnSendChat');
   const btnClearChat = document.getElementById('btnClearChat');
-
-  // Table
-  const tableBody = document.getElementById('tableBody');
-  const tableSearchInput = document.getElementById('tableSearchInput');
-  const btnExportCsv = document.getElementById('btnExportCsv');
 
   // Settings Modal
   const btnOpenSettings = document.getElementById('btnOpenSettings');
@@ -82,99 +138,229 @@
   const btnCloseSettings = document.getElementById('btnCloseSettings');
   const btnSaveSettings = document.getElementById('btnSaveSettings');
   const btnResetSettings = document.getElementById('btnResetSettings');
+  const btnTestConn = document.getElementById('btnTestConn');
+  const btnFetchModels = document.getElementById('btnFetchModels');
   const cfgBaseUrl = document.getElementById('cfgBaseUrl');
-  const cfgFlowId = document.getElementById('cfgFlowId');
   const cfgApiKey = document.getElementById('cfgApiKey');
-  const cfgTweaksInput = document.getElementById('cfgTweaksInput');
   const btnToggleApiKey = document.getElementById('btnToggleApiKey');
+  const cfgModelSelect = document.getElementById('cfgModelSelect');
+  const fetchModelsStatus = document.getElementById('fetchModelsStatus');
+  const testConnResult = document.getElementById('testConnResult');
+  const radioMilli = document.getElementById('radioMilli');
+  const radioAynet = document.getElementById('radioAynet');
+  const radioCustom = document.getElementById('radioCustom');
 
   // --------------------------------------------------------------------------
   // Initialization
   // --------------------------------------------------------------------------
   function init() {
-    setupDragAndDrop(dropzone1, fileInput1, (file) => handleFileSelect(1, file));
-    setupDragAndDrop(dropzone2, fileInput2, (file) => handleFileSelect(2, file));
+    applyConfigToUI();
+    setupEventListeners();
+  }
 
-    btnRemoveFile1.addEventListener('click', (e) => { e.stopPropagation(); removeFile(1); });
-    btnRemoveFile2.addEventListener('click', (e) => { e.stopPropagation(); removeFile(2); });
+  function setupEventListeners() {
+    // Engine mode toggle
+    btnEngineLocal.addEventListener('click', () => setEngineMode('local'));
+    btnEngineAselix.addEventListener('click', () => setEngineMode('aselix'));
 
-    btnRunComparison.addEventListener('click', runComparisonFlow);
-    btnUseSampleFiles.addEventListener('click', loadSampleComparison);
-
-    // Filter Buttons
-    document.querySelectorAll('.legend-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.legend-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        currentFilter = btn.dataset.filter;
-        renderDetailsTable();
-      });
+    // Threshold slider
+    thresholdSlider.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      thresholdValueBadge.textContent = `%${val}`;
+      appConfig.threshold = val;
+      saveConfig();
     });
 
-    tableSearchInput.addEventListener('input', renderDetailsTable);
-    btnExportCsv.addEventListener('click', exportToCSV);
+    // Input mode tabs
+    tabBtnExcel.addEventListener('click', () => setInputMode('excel'));
+    tabBtnPaste.addEventListener('click', () => setInputMode('paste'));
+
+    // Drag and Drop
+    setupDragAndDrop(dropzone1, fileInput1, (f) => handleExcelUpload(1, f));
+    setupDragAndDrop(dropzone2, fileInput2, (f) => handleExcelUpload(2, f));
+
+    btnRemoveFile1.addEventListener('click', (e) => { e.stopPropagation(); removeExcelFile(1); });
+    btnRemoveFile2.addEventListener('click', (e) => { e.stopPropagation(); removeExcelFile(2); });
+
+    // Column change in select
+    colSelect1.addEventListener('change', () => updateActiveColumnHighlight(1));
+    colSelect2.addEventListener('change', () => updateActiveColumnHighlight(2));
+
+    // Preview table toggles
+    btnTogglePreview1.addEventListener('click', () => togglePreviewCard(1));
+    btnTogglePreview2.addEventListener('click', () => togglePreviewCard(2));
+
+    // Live row counter for paste
+    textPaste1.addEventListener('input', updatePasteCounters);
+    textPaste2.addEventListener('input', updatePasteCounters);
+
+    // Run Comparison
+    btnRunComparison.addEventListener('click', runUnifiedComparison);
+    btnUseSampleFiles.addEventListener('click', loadSampleDemoData);
+
+    // Filter Buttons
+    tabFilterAll.addEventListener('click', () => setTableFilter('all'));
+    tabFilterIntersection.addEventListener('click', () => setTableFilter('intersection'));
+    tabFilterA.addEventListener('click', () => setTableFilter('only_a'));
+    tabFilterB.addEventListener('click', () => setTableFilter('only_b'));
+
+    // Metric Cards click filters
+    document.getElementById('cardIntersection')?.addEventListener('click', () => setTableFilter('intersection'));
+    document.getElementById('cardOnlyA')?.addEventListener('click', () => setTableFilter('only_a'));
+    document.getElementById('cardOnlyB')?.addEventListener('click', () => setTableFilter('only_b'));
+
+    // Search and Export
+    tableSearchInput.addEventListener('input', () => renderTableRows());
+    btnExportCSV.addEventListener('click', exportTableToCSV);
+    btnExportJSON.addEventListener('click', exportTableToJSON);
+    btnCopySummary.addEventListener('click', copySummaryToClipboard);
 
     // Chat
-    btnSendChat.addEventListener('click', sendChatMessage);
+    btnSendChat.addEventListener('click', handleSendChatMessage);
     chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        sendChatMessage();
+        handleSendChatMessage();
       }
     });
-
     btnClearChat.addEventListener('click', () => {
       chatMessages.innerHTML = `
         <div class="chat-msg bot-msg">
           <div class="msg-avatar">🤖</div>
-          <div class="msg-bubble">
-            <p>Sohbet geçmişi temizlendi. İki Excel dosyasının kıyaslama sonuçları hakkında istediğiniz soruyu sorabilirsiniz.</p>
-          </div>
+          <div class="msg-bubble"><p>Sohbet temizlendi. Kıyaslama sonuçlarınızla ilgili yeni bir soru sorabilirsiniz.</p></div>
         </div>
       `;
     });
 
-    document.querySelectorAll('.chip-btn').forEach(chip => {
-      chip.addEventListener('click', () => {
-        chatInput.value = chip.dataset.query;
-        chatInput.focus();
-        sendChatMessage();
+    // Suggestion chips
+    document.querySelectorAll('.chip-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        chatInput.value = btn.dataset.query;
+        handleSendChatMessage();
       });
     });
 
-    btnCopyAiSummary.addEventListener('click', () => {
-      if (currentAnalysis && currentAnalysis.flow_analiz_ozeti) {
-        navigator.clipboard.writeText(currentAnalysis.flow_analiz_ozeti);
-        const originalText = btnCopyAiSummary.querySelector('span').textContent;
-        btnCopyAiSummary.querySelector('span').textContent = 'Kopyalandı!';
-        setTimeout(() => {
-          btnCopyAiSummary.querySelector('span').textContent = originalText;
-        }, 2000);
-      }
+    // Settings Modal
+    btnOpenSettings.addEventListener('click', openSettingsModal);
+    btnCloseSettings.addEventListener('click', closeSettingsModal);
+    settingsModal.addEventListener('click', (e) => {
+      if (e.target === settingsModal) closeSettingsModal();
     });
+    btnSaveSettings.addEventListener('click', saveSettingsFromModal);
+    btnResetSettings.addEventListener('click', resetSettingsToDefault);
+    btnToggleApiKey.addEventListener('click', toggleApiKeyVisibility);
+    btnFetchModels.addEventListener('click', fetchModelsFromApi);
+    btnTestConn.addEventListener('click', testApiConnection);
 
-    // Settings
-    setupSettingsModal();
-    updateFlowStatusPill();
+    // Network radio change
+    document.querySelectorAll('input[name="networkChoice"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        const choice = e.target.value;
+        if (choice === 'milli') {
+          cfgBaseUrl.value = NETWORK_URLS.milli;
+        } else if (choice === 'aynet') {
+          cfgBaseUrl.value = NETWORK_URLS.aynet;
+        }
+      });
+    });
   }
 
   // --------------------------------------------------------------------------
-  // Drag & Drop Handlers
+  // Config & State Management
   // --------------------------------------------------------------------------
-  function setupDragAndDrop(dropzone, input, onFile) {
-    dropzone.addEventListener('click', () => input.click());
-
-    input.addEventListener('change', (e) => {
-      if (e.target.files && e.target.files[0]) {
-        onFile(e.target.files[0]);
+  function loadConfig() {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        return { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
       }
-    });
+    } catch (e) {
+      console.warn('LocalStorage error:', e);
+    }
+    return { ...DEFAULT_CONFIG };
+  }
 
+  function saveConfig() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(appConfig));
+    } catch (e) {
+      console.warn('LocalStorage save error:', e);
+    }
+  }
+
+  function applyConfigToUI() {
+    // Engine
+    setEngineMode(appConfig.engine, false);
+
+    // Threshold
+    thresholdSlider.value = appConfig.threshold || 80;
+    thresholdValueBadge.textContent = `%${appConfig.threshold || 80}`;
+
+    // Model name
+    currentModelDisplay.textContent = appConfig.model || 'aselix-llm-v1';
+    chatModelNameDisplay.textContent = appConfig.model || 'aselix-llm-v1';
+
+    // Settings modal inputs
+    cfgBaseUrl.value = appConfig.baseUrl || NETWORK_URLS.milli;
+    cfgApiKey.value = appConfig.apiKey || '';
+
+    if (appConfig.network === 'aynet') {
+      radioAynet.checked = true;
+    } else if (appConfig.network === 'custom') {
+      radioCustom.checked = true;
+    } else {
+      radioMilli.checked = true;
+    }
+
+    // Input mode
+    setInputMode(appConfig.inputMode || 'excel');
+  }
+
+  function setEngineMode(mode, save = true) {
+    appConfig.engine = mode;
+    if (mode === 'local') {
+      btnEngineLocal.classList.add('active');
+      btnEngineAselix.classList.remove('active');
+      engineStatusLabel.textContent = '⚡ Yerel ML (Çevrimdışı)';
+      engineStatusPill.className = 'flow-status-pill';
+      btnRunText.textContent = 'Kıyasla & Venn Şemasını Çiz (Yerel)';
+    } else {
+      btnEngineAselix.classList.add('active');
+      btnEngineLocal.classList.remove('active');
+      engineStatusLabel.textContent = '🤖 AselixAI API Aktif';
+      engineStatusPill.className = 'flow-status-pill online';
+      btnRunText.textContent = 'Kıyasla, Analiz Et & Venn Çiz';
+    }
+    if (save) saveConfig();
+  }
+
+  function setInputMode(mode) {
+    appConfig.inputMode = mode;
+    if (mode === 'excel') {
+      tabBtnExcel.classList.add('active');
+      tabBtnPaste.classList.remove('active');
+      tabContentExcel.style.display = 'block';
+      tabContentPaste.style.display = 'none';
+      actionHintText.textContent = 'Excel dosyalarını seçin ve kıyaslanacak sütunları belirleyin.';
+    } else {
+      tabBtnPaste.classList.add('active');
+      tabBtnExcel.classList.remove('active');
+      tabContentExcel.style.display = 'none';
+      tabContentPaste.style.display = 'block';
+      actionHintText.textContent = 'Her iki alana da satır satır veri yapıştırarak kıyaslamayı başlatın.';
+    }
+    saveConfig();
+  }
+
+  // --------------------------------------------------------------------------
+  // Drag and Drop & Excel Preview Upload
+  // --------------------------------------------------------------------------
+  function setupDragAndDrop(dropzone, fileInput, onFileSelected) {
     ['dragenter', 'dragover'].forEach(eventName => {
       dropzone.addEventListener(eventName, (e) => {
         e.preventDefault();
         e.stopPropagation();
-        dropzone.classList.add('dragover');
+        dropzone.classList.add('drag-over');
       });
     });
 
@@ -182,21 +368,32 @@
       dropzone.addEventListener(eventName, (e) => {
         e.preventDefault();
         e.stopPropagation();
-        dropzone.classList.remove('dragover');
+        dropzone.classList.remove('drag-over');
       });
     });
 
     dropzone.addEventListener('drop', (e) => {
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-        onFile(e.dataTransfer.files[0]);
+      const dt = e.dataTransfer;
+      if (dt.files && dt.files.length > 0) {
+        onFileSelected(dt.files[0]);
+      }
+    });
+
+    dropzone.addEventListener('click', (e) => {
+      if (!e.target.closest('.btn-remove')) {
+        fileInput.click();
+      }
+    });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files && fileInput.files.length > 0) {
+        onFileSelected(fileInput.files[0]);
       }
     });
   }
 
-  function handleFileSelect(index, file) {
-    const validExts = ['.xlsx', '.xls', '.xlsm'];
-    const hasValidExt = validExts.some(ext => file.name.toLowerCase().endsWith(ext));
-    if (!hasValidExt) {
+  async function handleExcelUpload(index, file) {
+    if (!file.name.match(/\.(xlsx|xls|xlsm)$/i)) {
       alert('Lütfen geçerli bir Excel (.xlsx, .xls) dosyası seçin.');
       return;
     }
@@ -204,58 +401,181 @@
     if (index === 1) {
       file1 = file;
       fileName1.textContent = file.name;
-      fileSub1.textContent = `${formatBytes(file.size)} • Seçildi`;
+      fileSub1.textContent = `${formatBytes(file.size)} • Yükleniyor...`;
       dropzoneContent1.style.display = 'none';
       fileView1.style.display = 'flex';
-      labelDocA.textContent = `Yalnızca ${file.name.replace(/\.[^/.]+$/, "")}`;
-      legendTitleA.textContent = `Sadece ${truncateStr(file.name, 14)}`;
     } else {
       file2 = file;
       fileName2.textContent = file.name;
-      fileSub2.textContent = `${formatBytes(file.size)} • Seçildi`;
+      fileSub2.textContent = `${formatBytes(file.size)} • Yükleniyor...`;
       dropzoneContent2.style.display = 'none';
       fileView2.style.display = 'flex';
-      labelDocB.textContent = `Yalnızca ${file.name.replace(/\.[^/.]+$/, "")}`;
-      legendTitleB.textContent = `Sadece ${truncateStr(file.name, 14)}`;
+    }
+
+    // Call /api/compare/excel-preview
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const resp = await fetch('/api/compare/excel-preview', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await resp.json();
+
+      if (data.durum === 'basarili') {
+        if (index === 1) {
+          previewData1 = data;
+          fileSub1.textContent = `${formatBytes(file.size)} • ${data.toplam_satir} satır okundu`;
+          populateColumnSelector(1, data.sutunlar, data.onerilen_sutun);
+          renderPreviewMiniTable(1, data.sutunlar, data.onerilen_sutun, data.onizleme_satirlari, data.toplam_satir);
+          colPickBox1.style.display = 'flex';
+        } else {
+          previewData2 = data;
+          fileSub2.textContent = `${formatBytes(file.size)} • ${data.toplam_satir} satır okundu`;
+          populateColumnSelector(2, data.sutunlar, data.onerilen_sutun);
+          renderPreviewMiniTable(2, data.sutunlar, data.onerilen_sutun, data.onizleme_satirlari, data.toplam_satir);
+          colPickBox2.style.display = 'flex';
+        }
+      } else {
+        alert(`Dosya önizleme uyarısı: ${data.mesaj}`);
+      }
+    } catch (err) {
+      console.error('Preview error:', err);
+      if (index === 1) fileSub1.textContent = `${formatBytes(file.size)} • Hazır`;
+      else fileSub2.textContent = `${formatBytes(file.size)} • Hazır`;
     }
   }
 
-  function removeFile(index) {
+  function removeExcelFile(index) {
     if (index === 1) {
       file1 = null;
+      previewData1 = null;
       fileInput1.value = '';
       dropzoneContent1.style.display = 'flex';
       fileView1.style.display = 'none';
-      labelDocA.textContent = 'Yalnızca 1. Belgede';
-      legendTitleA.textContent = 'Sadece 1. Belge';
+      colPickBox1.style.display = 'none';
+      previewCard1.style.display = 'none';
     } else {
       file2 = null;
+      previewData2 = null;
       fileInput2.value = '';
       dropzoneContent2.style.display = 'flex';
       fileView2.style.display = 'none';
-      labelDocB.textContent = 'Yalnızca 2. Belgede';
-      legendTitleB.textContent = 'Sadece 2. Belge';
+      colPickBox2.style.display = 'none';
+      previewCard2.style.display = 'none';
     }
   }
 
-  function formatBytes(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  function populateColumnSelector(index, columns, suggestedCol) {
+    const sel = index === 1 ? colSelect1 : colSelect2;
+    sel.innerHTML = '';
+
+    columns.forEach(col => {
+      const opt = document.createElement('option');
+      opt.value = col;
+      opt.textContent = col + (col === suggestedCol ? ' ★ (Algılanan Uygunsuzluk Sütunu)' : '');
+      if (col === suggestedCol) {
+        opt.selected = true;
+      }
+      sel.appendChild(opt);
+    });
   }
 
-  function truncateStr(str, n) {
-    return (str.length > n) ? str.substr(0, n - 1) + '…' : str;
+  function renderPreviewMiniTable(index, columns, activeCol, rows, totalRows) {
+    const scrollEl = index === 1 ? previewTableScroll1 : previewTableScroll2;
+    const badgeEl = index === 1 ? previewRowCountBadge1 : previewRowCountBadge2;
+
+    badgeEl.textContent = `Toplam ${totalRows} Satır (İlk 5 Gösteriliyor)`;
+
+    if (!rows || rows.length === 0) {
+      scrollEl.innerHTML = '<p style="padding:10px; color:var(--text-muted);">Önizleme verisi yok.</p>';
+      return;
+    }
+
+    let thHtml = columns.map(c => `
+      <th class="${c === activeCol ? 'active-col' : ''}">${escapeHtml(c)}</th>
+    `).join('');
+
+    let trHtml = rows.map(r => `
+      <tr>
+        ${columns.map(c => `<td class="${c === activeCol ? 'active-col' : ''}">${escapeHtml(String(r[c] !== null && r[c] !== undefined ? r[c] : ''))}</td>`).join('')}
+      </tr>
+    `).join('');
+
+    scrollEl.innerHTML = `
+      <table class="preview-mini-table">
+        <thead><tr>${thHtml}</tr></thead>
+        <tbody>${trHtml}</tbody>
+      </table>
+    `;
+  }
+
+  function updateActiveColumnHighlight(index) {
+    const sel = index === 1 ? colSelect1 : colSelect2;
+    const previewData = index === 1 ? previewData1 : previewData2;
+    if (previewData && previewData.sutunlar) {
+      renderPreviewMiniTable(index, previewData.sutunlar, sel.value, previewData.onizleme_satirlari, previewData.toplam_satir);
+    }
+  }
+
+  function togglePreviewCard(index) {
+    const card = index === 1 ? previewCard1 : previewCard2;
+    const btn = index === 1 ? btnTogglePreview1 : btnTogglePreview2;
+    if (card.style.display === 'none') {
+      card.style.display = 'block';
+      btn.textContent = '❌ Önizlemeyi Gizle';
+    } else {
+      card.style.display = 'none';
+      btn.textContent = '👁️ İlk 5 Satırı Göster';
+    }
   }
 
   // --------------------------------------------------------------------------
-  // Sample Data Loader
+  // Copy-Paste Textarea Counter
   // --------------------------------------------------------------------------
-  async function loadSampleComparison() {
+  function updatePasteCounters() {
+    const lines1 = textPaste1.value.split('\n').filter(l => l.trim().length > 0);
+    const lines2 = textPaste2.value.split('\n').filter(l => l.trim().length > 0);
+    lineCount1.textContent = `${lines1.length} satır`;
+    lineCount2.textContent = `${lines2.length} satır`;
+  }
+
+  // --------------------------------------------------------------------------
+  // Demo Sample Data Loader
+  // --------------------------------------------------------------------------
+  function loadSampleDemoData() {
+    if (appConfig.inputMode === 'paste') {
+      textPaste1.value = [
+        'Pano içi etiketleme eksik',
+        'Kablo kesiti standart dışı (2.5mm yerine 1.5mm)',
+        'Topraklama barası cıvatası gevşek',
+        'Acil durdurma butonu mekanik takılma yapıyor',
+        'PLC haberleşme modülü zaman aşımı hatası',
+        'Hidrolik rekor sızdırmazlık contası deforme',
+        'Röle soket kilitleme tırnağı kırık'
+      ].join('\n');
+
+      textPaste2.value = [
+        'etiketleme eksik pano içi', // Fuzzy match with typo/reordered words
+        'Topraklama barası cıvatası gevşek', // Exact match
+        'Acil stop butonu mekanik takılıyor', // Fuzzy match
+        'Optik sensör kalibrasyon sapması', // New error in 2
+        'Solenoid valf bobini aşırı ısınıyor', // New error in 2
+        'Ethernet soketi RJ45 tırnağı oturmamış' // New error in 2
+      ].join('\n');
+
+      updatePasteCounters();
+      runUnifiedComparison();
+    } else {
+      // Load sample excel through demo endpoint
+      triggerSampleExcelCompare();
+    }
+  }
+
+  async function triggerSampleExcelCompare() {
     progressBanner.style.display = 'flex';
-    progressStatusText.textContent = 'Örnek uygunsuzluk verileri sunucudan yükleniyor...';
+    progressStatusText.textContent = 'Sunucudaki hazır örnek uygunsuzluk Excel verileri yükleniyor...';
     progressSubText.textContent = 'Dry-run ve SKT fazları karşılaştırma verisi hazırlanıyor...';
 
     try {
@@ -264,9 +584,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           base_url: appConfig.baseUrl,
-          flow_id: appConfig.flowId,
-          api_key: appConfig.apiKey,
-          tweaks_input: appConfig.tweaksInput
+          flow_id: 'c16ecc83-ff64-4fc7-bb52-0f594beaf70a',
+          api_key: appConfig.apiKey
         })
       });
 
@@ -274,56 +593,79 @@
       progressBanner.style.display = 'none';
 
       if (data.durum === 'basarili') {
-        fileName1.textContent = data.dosya_1_adi || 'Örnek_Faz_1_DryRun.xlsx';
-        fileSub1.textContent = 'Hazır Test Verisi';
+        fileName1.textContent = data.dosya_1_adi || 'Ornek_Faz1_DryRun.xlsx';
+        fileSub1.textContent = 'Hazır Test Fazı';
         dropzoneContent1.style.display = 'none';
         fileView1.style.display = 'flex';
 
-        fileName2.textContent = data.dosya_2_adi || 'Örnek_Faz_2_SKT.xlsx';
-        fileSub2.textContent = 'Hazır Test Verisi';
+        fileName2.textContent = data.dosya_2_adi || 'Ornek_Faz2_SKT.xlsx';
+        fileSub2.textContent = 'Hazır Test Fazı';
         dropzoneContent2.style.display = 'none';
         fileView2.style.display = 'flex';
 
         renderAnalysisResults(data);
       } else {
-        alert('Hata: ' + (data.mesaj || 'Örnek veri yüklenemedi.'));
+        alert('Örnek veri yükleme uyarısı: ' + data.mesaj);
       }
-    } catch (err) {
+    } catch (e) {
       progressBanner.style.display = 'none';
-      alert('Bağlantı hatası: ' + err.message);
+      alert('Bağlantı hatası: ' + e.message);
     }
   }
 
   // --------------------------------------------------------------------------
-  // Run Comparison Flow
+  // Run Unified Comparison (/api/compare/run)
   // --------------------------------------------------------------------------
-  async function runComparisonFlow() {
-    if (!file1 || !file2) {
-      alert('Lütfen kıyaslamak için her iki Excel dosyasını da sürükleyip bırakın veya seçin.');
-      return;
+  async function runUnifiedComparison() {
+    const inputMode = appConfig.inputMode || 'excel';
+
+    if (inputMode === 'excel') {
+      if (!file1 || !file2) {
+        alert('Lütfen kıyaslamak için her iki Excel dosyasını da seçin veya sürükleyin.');
+        return;
+      }
+    } else {
+      const lines1 = textPaste1.value.split('\n').filter(l => l.trim().length > 0);
+      const lines2 = textPaste2.value.split('\n').filter(l => l.trim().length > 0);
+      if (lines1.length === 0 || lines2.length === 0) {
+        alert('Lütfen her iki metin alanına da kıyaslanacak en az birer satır yapıştırın.');
+        return;
+      }
     }
 
     progressBanner.style.display = 'flex';
-    progressStatusText.textContent = 'Excel belgeleri okunuyor ve küme analizi yapılıyor...';
-    progressSubText.textContent = `ASELSAN LLM Suite Flow (${appConfig.flowId.slice(0, 8)}...) çağrılıyor...`;
-
     btnRunComparison.disabled = true;
+
+    const thresholdDec = (appConfig.threshold || 80) / 100.0;
+    const isAselix = appConfig.engine === 'aselix';
+
+    progressStatusText.textContent = isAselix 
+      ? 'Veriler kıyaslanıyor ve ASELSAN AselixAI yönetici özeti üretiliyor...'
+      : 'Veriler yerel mesafe ve fuzzy matching algoritması ile kıyaslanıyor...';
+    progressSubText.textContent = `Benzerlik toleransı: %${appConfig.threshold} • Motor: ${isAselix ? 'AselixAI (' + appConfig.model + ')' : 'Yerel ML'}`;
 
     try {
       const formData = new FormData();
-      formData.append('file_1', file1);
-      formData.append('file_2', file2);
+      formData.append('input_mode', inputMode);
+      formData.append('engine_mode', appConfig.engine);
+      formData.append('threshold', thresholdDec);
       formData.append('base_url', appConfig.baseUrl);
-      formData.append('flow_id', appConfig.flowId);
       formData.append('api_key', appConfig.apiKey || '');
-      formData.append('tweaks_input', appConfig.tweaksInput || '');
+      formData.append('model', appConfig.model || 'aselix-llm-v1');
 
-      const colMatch = document.getElementById('colMatchSelect').value;
-      if (colMatch && colMatch !== 'auto') {
-        formData.append('column_name', colMatch);
+      if (inputMode === 'excel') {
+        formData.append('file_1', file1);
+        formData.append('file_2', file2);
+        formData.append('col_1', colSelect1.value || 'auto');
+        formData.append('col_2', colSelect2.value || 'auto');
+      } else {
+        formData.append('text_1', textPaste1.value);
+        formData.append('text_2', textPaste2.value);
+        formData.append('name_1', '1. Metin Seti');
+        formData.append('name_2', '2. Metin Seti');
       }
 
-      const resp = await fetch('/api/flow/compare', {
+      const resp = await fetch('/api/compare/run', {
         method: 'POST',
         body: formData
       });
@@ -335,59 +677,72 @@
       if (data.durum === 'basarili') {
         renderAnalysisResults(data);
       } else {
-        alert('Analiz Hatası: ' + (data.mesaj || 'Bilinmeyen bir hata oluştu.'));
+        alert('Kıyaslama Hatası: ' + (data.mesaj || 'İşlem tamamlanamadı.'));
       }
     } catch (err) {
       btnRunComparison.disabled = false;
       progressBanner.style.display = 'none';
-      alert('Sunucu ile iletişim kurulurken hata oluştu: ' + err.message);
+      alert('Sunucu iletişim hatası: ' + err.message);
     }
   }
 
   // --------------------------------------------------------------------------
-  // Render Results & Interactive Venn
+  // Render Results, Venn Diagram & Table
   // --------------------------------------------------------------------------
   function renderAnalysisResults(data) {
     currentAnalysis = data;
-    activeSessionId = data.session_id || generateUUID();
     resultsSection.style.display = 'block';
-
-    // Scroll smoothly to results
     resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     const v = data.venn_verileri;
+    const isAselix = data.engine_mode === 'aselix';
 
-    // Update Metrics
-    valOnlyA.textContent = v.only_a_count;
-    valCommon.textContent = v.intersection_count;
-    valOnlyB.textContent = v.only_b_count;
-    valSimilarity.textContent = `%${Math.round((v.jaccard_similarity || 0) * 100)}`;
-    valTotalUnique.textContent = `Toplam ${v.total_unique} benzersiz uygunsuzluk analiz edildi.`;
+    // Summary Engine Badge
+    summaryEngineBadge.innerHTML = isAselix
+      ? `<span class="engine-icon">🤖</span><span>ASELSAN AselixAI (${data.model_kullanilan || appConfig.model}) Yönetici Özeti</span>`
+      : `<span class="engine-icon">⚡</span><span>Yerel ML & String Distance (%${Math.round((data.esik_orani || 0.8) * 100)} Eşik)</span>`;
 
-    // Update Counts on Filter Buttons
-    countAll.textContent = v.total_unique;
-    countOnlyA.textContent = v.only_a_count;
-    countCommon.textContent = v.intersection_count;
-    countOnlyB.textContent = v.only_b_count;
-
-    // AI Summary
-    if (data.flow_analiz_ozeti) {
-      aiSummaryBody.innerHTML = markdownToHtml(data.flow_analiz_ozeti);
-      flowModelMeta.textContent = `Flow ID: ${appConfig.flowId.slice(0, 8)}... • Yapay Zeka Çıktısı`;
+    // Summary Text
+    if (data.flow_analiz_ozeti && data.flow_analiz_ozeti.trim()) {
+      summaryText.innerHTML = markdownToHtml(data.flow_analiz_ozeti);
     } else {
-      aiSummaryBody.innerHTML = `
-        <div class="note-box">
-          <p><strong>Matematiksel Venn Şeması Başarıyla Çizildi!</strong></p>
-          <p>ASELSAN LLM Suite Flow'dan detaylı yapay zeka analiz özeti almak için sağ üstteki <strong>Ayarlar</strong> menüsünden API anahtarınızı (x-api-key) tanımlayabilirsiniz.</p>
+      summaryText.innerHTML = `
+        <div style="line-height: 1.7;">
+          <p><strong>${escapeHtml(data.ozet_yorum || '')}</strong></p>
+          <p style="margin-top: 8px; color: var(--text-muted); font-size: 13px;">
+            ℹ️ AselixAI ile derinlemesine kök neden analizi ve önleyici faaliyet önerileri almak için yukarıdan 
+            <strong>AselixAI API</strong> modunu aktif edebilir ve Ayarlar'dan API anahtarınızı tanımlayabilirsiniz.
+          </p>
         </div>
       `;
     }
 
-    // Render Dynamic SVG Venn Diagram
+    // Metrics
+    statTotal.textContent = v.total_unique;
+    statIntersection.textContent = v.intersection_count;
+    statJaccard.textContent = `Jaccard Benzerlik Oranı: %${Math.round((v.jaccard_similarity || 0) * 100)}`;
+    statOnlyA.textContent = v.only_a_count;
+    statOnlyB.textContent = v.only_b_count;
+
+    statOnlyASub.textContent = `${data.dosya_1_adi || '1. Belge'} içinde tekil`;
+    statOnlyBSub.textContent = `${data.dosya_2_adi || '2. Belge'} içinde yeni`;
+
+    legendTextA.textContent = truncateStr(data.dosya_1_adi || '1. Belge', 20);
+    legendTextB.textContent = truncateStr(data.dosya_2_adi || '2. Belge', 20);
+
+    // Update Filter Tab Badges
+    countAll.textContent = v.total_unique;
+    countIntersection.textContent = v.intersection_count;
+    countA.textContent = v.only_a_count;
+    countB.textContent = v.only_b_count;
+
+    // Draw Venn SVG
     drawVennDiagram(v, data.dosya_1_adi, data.dosya_2_adi);
 
     // Render Table
-    renderDetailsTable();
+    currentFilter = 'all';
+    updateFilterTabButtons();
+    renderTableRows();
   }
 
   // --------------------------------------------------------------------------
@@ -397,458 +752,531 @@
     const labelA = truncateStr(nameA || '1. Belge', 16);
     const labelB = truncateStr(nameB || '2. Belge', 16);
 
-    // SVG geometry: width=640, height=360
-    // Circle A center=(230, 180), r=140
-    // Circle B center=(410, 180), r=140
-    // Distance between centers = 180 (creates perfect realistic Venn overlap)
     const svgContent = `
-      <defs>
-        <!-- Gradients -->
-        <linearGradient id="gradCircleA" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.55"/>
-          <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0.35"/>
-        </linearGradient>
+      <svg viewBox="0 0 640 360" width="100%" height="100%" style="overflow: visible;">
+        <defs>
+          <linearGradient id="gradCircleA" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.55"/>
+            <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0.35"/>
+          </linearGradient>
 
-        <linearGradient id="gradCircleB" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#ec4899" stop-opacity="0.55"/>
-          <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0.35"/>
-        </linearGradient>
+          <linearGradient id="gradCircleB" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#ec4899" stop-opacity="0.55"/>
+            <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0.35"/>
+          </linearGradient>
 
-        <linearGradient id="gradCommon" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.7"/>
-          <stop offset="100%" stop-color="#c084fc" stop-opacity="0.7"/>
-        </linearGradient>
+          <linearGradient id="gradCommon" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.75"/>
+            <stop offset="100%" stop-color="#c084fc" stop-opacity="0.75"/>
+          </linearGradient>
 
-        <!-- Filters for glow -->
-        <filter id="glowA" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="6" result="blur"/>
-          <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-        </filter>
-        <filter id="glowCommon" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="8" result="blur"/>
-          <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-        </filter>
+          <clipPath id="clipCircleA">
+            <circle cx="230" cy="180" r="140" />
+          </clipPath>
+        </defs>
 
-        <!-- Clip Paths for exact click detection -->
-        <clipPath id="clipCircleA">
-          <circle cx="230" cy="180" r="140" />
-        </clipPath>
-        <clipPath id="clipCircleB">
-          <circle cx="410" cy="180" r="140" />
-        </clipPath>
-      </defs>
+        <!-- Circle A Full Disc -->
+        <circle id="svgCircleA" cx="230" cy="180" r="140"
+                fill="url(#gradCircleA)" stroke="#60a5fa" stroke-width="2.5"
+                class="venn-circle" data-region="only_a" style="cursor: pointer;" />
 
-      <!-- Circle A Full Disc -->
-      <circle id="svgCircleA" cx="230" cy="180" r="140"
-              fill="url(#gradCircleA)" stroke="#60a5fa" stroke-width="2.5"
-              class="venn-circle" data-region="only_a" />
+        <!-- Circle B Full Disc -->
+        <circle id="svgCircleB" cx="410" cy="180" r="140"
+                fill="url(#gradCircleB)" stroke="#f472b6" stroke-width="2.5"
+                class="venn-circle" data-region="only_b" style="cursor: pointer;" />
 
-      <!-- Circle B Full Disc -->
-      <circle id="svgCircleB" cx="410" cy="180" r="140"
-              fill="url(#gradCircleB)" stroke="#f472b6" stroke-width="2.5"
-              class="venn-circle" data-region="only_b" />
+        <!-- Intersection Lens (B clipped inside A) -->
+        <circle id="svgIntersection" cx="410" cy="180" r="140"
+                clip-path="url(#clipCircleA)" fill="url(#gradCommon)"
+                stroke="#a78bfa" stroke-width="2"
+                class="venn-intersection" data-region="intersection" style="cursor: pointer;" />
 
-      <!-- Exact Intersection Lens (B clipped inside A) -->
-      <circle id="svgIntersection" cx="410" cy="180" r="140"
-              clip-path="url(#clipCircleA)" fill="url(#gradCommon)"
-              stroke="#a78bfa" stroke-width="2"
-              class="venn-intersection" data-region="common" />
+        <!-- Set A Only Count & Label -->
+        <text x="160" y="172" class="venn-text-count" style="font-family: var(--font-heading); font-size: 28px; font-weight: 700; fill: #93c5fd; text-anchor: middle;">${vennData.only_a_count}</text>
+        <text x="160" y="202" class="venn-text-label" style="font-size: 13px; font-weight: 600; fill: #cbd5e1; text-anchor: middle;">Yalnızca 1. Belge</text>
+        <text x="160" y="220" class="venn-text-label" style="font-size: 11px; fill: #93c5fd; text-anchor: middle;">(${escapeHtml(labelA)})</text>
 
-      <!-- Set A Only Count & Label -->
-      <text x="160" y="172" class="venn-text-count">${vennData.only_a_count}</text>
-      <text x="160" y="202" class="venn-text-label">Yalnızca 1. Belge</text>
-      <text x="160" y="220" class="venn-text-label" style="fill: #93c5fd; font-size: 11px;">(${labelA})</text>
+        <!-- Intersection Count & Label -->
+        <text x="320" y="165" class="venn-text-count" style="font-family: var(--font-heading); fill: #ffffff; font-size: 34px; font-weight: 800; text-anchor: middle; filter: drop-shadow(0 0 10px rgba(255,255,255,0.8));">${vennData.intersection_count}</text>
+        <text x="320" y="198" class="venn-text-label" style="font-size: 14px; font-weight: 700; fill: #ffffff; text-anchor: middle;">Ortak Kesişim</text>
+        <text x="320" y="216" class="venn-text-label" style="font-size: 11px; fill: #e9d5ff; text-anchor: middle;">(Tekrarlayanlar)</text>
 
-      <!-- Intersection Count & Label -->
-      <text x="320" y="165" class="venn-text-count" style="fill: #ffffff; font-size: 32px; filter: drop-shadow(0 0 8px rgba(255,255,255,0.7));">${vennData.intersection_count}</text>
-      <text x="320" y="198" class="venn-text-label" style="fill: #ffffff; font-weight: 700;">Ortak Kesişim</text>
-      <text x="320" y="216" class="venn-text-label" style="fill: #e9d5ff; font-size: 11px;">Her İki Belgede Ortak</text>
-
-      <!-- Set B Only Count & Label -->
-      <text x="480" y="172" class="venn-text-count">${vennData.only_b_count}</text>
-      <text x="480" y="202" class="venn-text-label">Yalnızca 2. Belge</text>
-      <text x="480" y="220" class="venn-text-label" style="fill: #f9a8d4; font-size: 11px;">(${labelB})</text>
+        <!-- Set B Only Count & Label -->
+        <text x="480" y="172" class="venn-text-count" style="font-family: var(--font-heading); font-size: 28px; font-weight: 700; fill: #f9a8d4; text-anchor: middle;">${vennData.only_b_count}</text>
+        <text x="480" y="202" class="venn-text-label" style="font-size: 13px; font-weight: 600; fill: #cbd5e1; text-anchor: middle;">Yalnızca 2. Belge</text>
+        <text x="480" y="220" class="venn-text-label" style="font-size: 11px; fill: #f9a8d4; text-anchor: middle;">(${escapeHtml(labelB)})</text>
+      </svg>
     `;
 
-    vennSvg.innerHTML = svgContent;
+    vennContainer.innerHTML = svgContent;
 
     // Attach click events on SVG regions
-    document.querySelectorAll('#vennSvg [data-region]').forEach(el => {
+    vennContainer.querySelectorAll('[data-region]').forEach(el => {
       el.addEventListener('click', () => {
-        const reg = el.dataset.region;
-        const targetBtn = document.querySelector(`.legend-btn[data-filter="${reg}"]`);
-        if (targetBtn) targetBtn.click();
+        setTableFilter(el.dataset.region);
       });
     });
   }
 
   // --------------------------------------------------------------------------
-  // Render Details Table with Search & Filter
+  // Table Rows & Filtering
   // --------------------------------------------------------------------------
-  function renderDetailsTable() {
+  function setTableFilter(filter) {
+    currentFilter = filter;
+    updateFilterTabButtons();
+    renderTableRows();
+  }
+
+  function updateFilterTabButtons() {
+    [tabFilterAll, tabFilterIntersection, tabFilterA, tabFilterB].forEach(btn => btn.classList.remove('active'));
+    if (currentFilter === 'all') tabFilterAll.classList.add('active');
+    else if (currentFilter === 'intersection') tabFilterIntersection.classList.add('active');
+    else if (currentFilter === 'only_a') tabFilterA.classList.add('active');
+    else if (currentFilter === 'only_b') tabFilterB.classList.add('active');
+  }
+
+  function renderTableRows() {
     if (!currentAnalysis) return;
 
     const v = currentAnalysis.venn_verileri;
-    const searchTerm = tableSearchInput.value.toLowerCase().trim();
+    const query = tableSearchInput.value.toLowerCase().trim();
 
-    let allItems = [];
+    let rows = [];
 
-    // Tag each item
+    // 1. Matched Pairs (Intersection)
+    (v.matched_pairs || []).forEach(p => {
+      rows.push({
+        itemA: p.item_a,
+        itemB: p.item_b,
+        similarity: p.similarity,
+        region: 'intersection',
+        matchType: p.match_type
+      });
+    });
+
+    // 2. Only A
     (v.only_a_items || []).forEach(item => {
-      allItems.push({
-        text: item,
+      rows.push({
+        itemA: item,
+        itemB: '-',
+        similarity: 0,
         region: 'only_a',
-        badgeClass: 'badge-set-a',
-        badgeLabel: 'Yalnızca 1. Belge',
-        source: currentAnalysis.dosya_1_adi || '1. Belge'
+        matchType: 'Yalnızca 1. Belge'
       });
     });
 
-    (v.intersection_items || []).forEach(item => {
-      allItems.push({
-        text: item,
-        region: 'common',
-        badgeClass: 'badge-common',
-        badgeLabel: 'Ortak Kesişim',
-        source: 'Her İki Belge'
-      });
-    });
-
+    // 3. Only B
     (v.only_b_items || []).forEach(item => {
-      allItems.push({
-        text: item,
+      rows.push({
+        itemA: '-',
+        itemB: item,
+        similarity: 0,
         region: 'only_b',
-        badgeClass: 'badge-set-b',
-        badgeLabel: 'Yalnızca 2. Belge',
-        source: currentAnalysis.dosya_2_adi || '2. Belge'
+        matchType: 'Yalnızca 2. Belge'
       });
     });
 
     // Filter by Region
     if (currentFilter !== 'all') {
-      allItems = allItems.filter(i => i.region === currentFilter);
+      rows = rows.filter(r => r.region === currentFilter);
     }
 
-    // Filter by Search
-    if (searchTerm) {
-      allItems = allItems.filter(i => i.text.toLowerCase().includes(searchTerm));
+    // Filter by Search Query
+    if (query) {
+      rows = rows.filter(r => (
+        (r.itemA && r.itemA.toLowerCase().includes(query)) ||
+        (r.itemB && r.itemB.toLowerCase().includes(query)) ||
+        (r.matchType && r.matchType.toLowerCase().includes(query))
+      ));
     }
 
-    if (allItems.length === 0) {
-      tableBody.innerHTML = `
+    if (rows.length === 0) {
+      detailsTableBody.innerHTML = `
         <tr>
-          <td colspan="4" class="text-center text-muted" style="padding: 24px;">
-            Arama kriterine veya seçili filtreye uygun kayıt bulunamadı.
+          <td colspan="4" style="text-align: center; padding: 24px; color: var(--text-muted);">
+            Arama kriterine uygun kayıt bulunamadı.
           </td>
         </tr>
       `;
       return;
     }
 
-    tableBody.innerHTML = allItems.map((item, idx) => `
-      <tr>
-        <td style="color: var(--text-dim); font-family: var(--font-mono); font-size: 11px;">${idx + 1}</td>
-        <td><span class="table-badge ${item.badgeClass}">${item.badgeLabel}</span></td>
-        <td style="font-weight: 500;">${escapeHtml(item.text)}</td>
-        <td style="color: var(--text-muted); font-size: 12px;">${escapeHtml(truncateStr(item.source, 20))}</td>
-      </tr>
-    `).join('');
+    detailsTableBody.innerHTML = rows.map((r, idx) => {
+      let badgeHtml = '';
+      if (r.region === 'intersection') {
+        if (r.similarity >= 99.5) {
+          badgeHtml = `<span class="badge-similarity-exact">✓ %100 Tam Eşleşme</span>`;
+        } else {
+          badgeHtml = `<span class="badge-similarity-fuzzy">≈ %${r.similarity} Benzer</span>`;
+        }
+      } else if (r.region === 'only_a') {
+        badgeHtml = `<span class="badge-similarity-only a">Yalnızca 1. Belge</span>`;
+      } else {
+        badgeHtml = `<span class="badge-similarity-only b">Yalnızca 2. Belge</span>`;
+      }
+
+      return `
+        <tr>
+          <td style="color: var(--text-dim); font-family: var(--font-mono);">${idx + 1}</td>
+          <td style="font-weight: ${r.itemA !== '-' ? '500' : 'normal'}; color: ${r.itemA === '-' ? 'var(--text-dim)' : 'var(--text-main)'};">
+            ${escapeHtml(r.itemA)}
+          </td>
+          <td style="font-weight: ${r.itemB !== '-' ? '500' : 'normal'}; color: ${r.itemB === '-' ? 'var(--text-dim)' : 'var(--text-main)'};">
+            ${escapeHtml(r.itemB)}
+          </td>
+          <td>${badgeHtml}</td>
+        </tr>
+      `;
+    }).join('');
   }
 
-  function exportToCSV() {
+  // --------------------------------------------------------------------------
+  // Export CSV & JSON
+  // --------------------------------------------------------------------------
+  function exportTableToCSV() {
     if (!currentAnalysis) return;
     const v = currentAnalysis.venn_verileri;
 
-    let rows = [["Sira", "Durum Kumesi", "Uygunsuzluk Tanimi", "Kaynak"]];
-    let idx = 1;
+    let csvContent = 'Sıra,1. Belge Kaydı,2. Belge Karşılığı,Benzerlik Puanı,Durum / Bölge\n';
+    let rowIdx = 1;
 
-    (v.only_a_items || []).forEach(item => rows.push([idx++, "Yalnizca 1. Belge", `"${item.replace(/"/g, '""')}"`, currentAnalysis.dosya_1_adi]));
-    (v.intersection_items || []).forEach(item => rows.push([idx++, "Ortak Kesisim", `"${item.replace(/"/g, '""')}"`, "Her Iki Belge"]));
-    (v.only_b_items || []).forEach(item => rows.push([idx++, "Yalnizca 2. Belge", `"${item.replace(/"/g, '""')}"`, currentAnalysis.dosya_2_adi]));
+    (v.matched_pairs || []).forEach(p => {
+      csvContent += `"${rowIdx++}","${csvEscape(p.item_a)}","${csvEscape(p.item_b)}","%${p.similarity}","Ortak Kesişim"\n`;
+    });
+    (v.only_a_items || []).forEach(item => {
+      csvContent += `"${rowIdx++}","${csvEscape(item)}","-","0%","Yalnızca 1. Belge"\n`;
+    });
+    (v.only_b_items || []).forEach(item => {
+      csvContent += `"${rowIdx++}","-","${csvEscape(item)}","0%","Yalnızca 2. Belge"\n`;
+    });
 
-    const csvContent = "\uFEFF" + rows.map(e => e.join(";")).join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `Venn_Kiyaslama_Raporu_${Date.now()}.csv`;
-    link.click();
+    downloadBlob(csvContent, 'venn_kiyaslama_raporu.csv', 'text/csv;charset=utf-8;');
+  }
+
+  function exportTableToJSON() {
+    if (!currentAnalysis) return;
+    const jsonStr = JSON.stringify(currentAnalysis, null, 2);
+    downloadBlob(jsonStr, 'venn_kiyaslama_raporu.json', 'application/json;charset=utf-8;');
+  }
+
+  function downloadBlob(content, filename, type) {
+    const blob = new Blob(['\uFEFF' + content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function copySummaryToClipboard() {
+    if (!summaryText.textContent) return;
+    navigator.clipboard.writeText(summaryText.textContent.trim()).then(() => {
+      btnCopySummary.innerHTML = `<span>✓ Kopyalandı!</span>`;
+      setTimeout(() => {
+        btnCopySummary.innerHTML = `
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          <span>Kopyala</span>
+        `;
+      }, 2000);
+    });
   }
 
   // --------------------------------------------------------------------------
-  // Chat Integration with Flow API
+  // Chat Assistant with AselixAI
   // --------------------------------------------------------------------------
-  async function sendChatMessage() {
-    const text = chatInput.value.trim();
-    if (!text) return;
+  async function handleSendChatMessage() {
+    const msg = chatInput.value.trim();
+    if (!msg) return;
 
+    // Append user message
+    appendChatMessage('user', msg);
     chatInput.value = '';
+    btnSendChat.disabled = true;
 
-    // Append User Message
-    appendChatMessage('user', text);
+    // Typing placeholder
+    const typingId = appendTypingIndicator();
 
-    // Append Temporary Bot Loading Message
-    const loadingId = 'loading-' + Date.now();
-    const loadingEl = document.createElement('div');
-    loadingEl.className = 'chat-msg bot-msg';
-    loadingEl.id = loadingId;
-    loadingEl.innerHTML = `
-      <div class="msg-avatar">🤖</div>
-      <div class="msg-bubble">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <div class="spinner" style="width: 16px; height: 16px; border-width: 2px;"></div>
-          <span>ASELSAN LLM Suite yanıt hazırlıyor...</span>
-        </div>
-      </div>
-    `;
-    chatMessages.appendChild(loadingEl);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    // Prepare context
+    let contextObj = null;
+    if (currentAnalysis) {
+      contextObj = {
+        dosya_1: currentAnalysis.dosya_1_adi,
+        dosya_2: currentAnalysis.dosya_2_adi,
+        intersection_count: currentAnalysis.venn_verileri?.intersection_count || 0,
+        only_a_count: currentAnalysis.venn_verileri?.only_a_count || 0,
+        only_b_count: currentAnalysis.venn_verileri?.only_b_count || 0,
+        jaccard_similarity: currentAnalysis.venn_verileri?.jaccard_similarity || 0,
+        esik_orani: currentAnalysis.esik_orani || 0.8
+      };
+    }
 
     try {
-      const resp = await fetch('/api/flow/chat', {
+      const resp = await fetch('/api/aselix/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: text,
-          session_id: activeSessionId,
           base_url: appConfig.baseUrl,
-          flow_id: appConfig.flowId,
           api_key: appConfig.apiKey,
-          tweaks_input: appConfig.tweaksInput,
-          context: currentAnalysis ? {
-            dosya_1: currentAnalysis.dosya_1_adi,
-            dosya_2: currentAnalysis.dosya_2_adi,
-            only_a_count: currentAnalysis.venn_verileri.only_a_count,
-            intersection_count: currentAnalysis.venn_verileri.intersection_count,
-            only_b_count: currentAnalysis.venn_verileri.only_b_count,
-            jaccard: currentAnalysis.venn_verileri.jaccard_similarity
-          } : null
+          model: appConfig.model || 'aselix-llm-v1',
+          messages: [{ role: 'user', content: msg }],
+          temperature: 0.2,
+          context: contextObj
         })
       });
 
       const data = await resp.json();
-      const loadNode = document.getElementById(loadingId);
-      if (loadNode) loadNode.remove();
+      removeTypingIndicator(typingId);
+      btnSendChat.disabled = false;
 
-      if (data.durum === 'basarili' && data.cevap) {
+      if (data.durum === 'basarili') {
         appendChatMessage('bot', data.cevap);
       } else {
-        appendChatMessage('bot', '⚠️ ' + (data.mesaj || 'Modelden yanıt alınamadı. Lütfen API Key ayarlarınızı kontrol edin.'));
+        appendChatMessage('bot', `⚠️ AselixAI Yanıtı: ${data.mesaj || 'Cevap üretilemedi. Lütfen Ayarlar menüsünden API anahtarınızı ve ağ seçiminizi kontrol edin.'}`);
       }
     } catch (err) {
-      const loadNode = document.getElementById(loadingId);
-      if (loadNode) loadNode.remove();
-      appendChatMessage('bot', '⚠️ Bağlantı hatası: ' + err.message);
+      removeTypingIndicator(typingId);
+      btnSendChat.disabled = false;
+      appendChatMessage('bot', `⚠️ Bağlantı hatası: ${err.message}`);
     }
   }
 
   function appendChatMessage(sender, text) {
-    const msgEl = document.createElement('div');
-    msgEl.className = `chat-msg ${sender === 'user' ? 'user-msg' : 'bot-msg'}`;
+    const msgDiv = document.createElement('div');
+    msgDiv.className = `chat-msg ${sender === 'user' ? 'user-msg' : 'bot-msg'}`;
+
     const avatar = sender === 'user' ? '👤' : '🤖';
-    msgEl.innerHTML = `
+    msgDiv.innerHTML = `
       <div class="msg-avatar">${avatar}</div>
-      <div class="msg-bubble">${markdownToHtml(text)}</div>
+      <div class="msg-bubble">${sender === 'user' ? `<p>${escapeHtml(text)}</p>` : markdownToHtml(text)}</div>
     `;
-    chatMessages.appendChild(msgEl);
+
+    chatMessages.appendChild(msgDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
+  function appendTypingIndicator() {
+    const id = 'typing_' + Date.now();
+    const div = document.createElement('div');
+    div.id = id;
+    div.className = 'chat-msg bot-msg';
+    div.innerHTML = `
+      <div class="msg-avatar">🤖</div>
+      <div class="msg-bubble"><span class="typing-dots"><span>.</span><span>.</span><span>.</span> AselixAI düşünüyor</span></div>
+    `;
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return id;
+  }
+
+  function removeTypingIndicator(id) {
+    const el = document.getElementById(id);
+    if (el) el.remove();
+  }
+
   // --------------------------------------------------------------------------
-  // Settings Modal Handlers
+  // Settings Modal Functions
   // --------------------------------------------------------------------------
-  function setupSettingsModal() {
-    btnOpenSettings.addEventListener('click', () => {
-      cfgBaseUrl.value = appConfig.baseUrl;
-      cfgFlowId.value = appConfig.flowId;
-      cfgApiKey.value = appConfig.apiKey;
-      cfgTweaksInput.value = appConfig.tweaksInput;
-      settingsModal.style.display = 'flex';
-    });
+  function openSettingsModal() {
+    cfgBaseUrl.value = appConfig.baseUrl || NETWORK_URLS.milli;
+    cfgApiKey.value = appConfig.apiKey || '';
 
-    btnCloseSettings.addEventListener('click', () => {
-      settingsModal.style.display = 'none';
-    });
+    if (appConfig.network === 'aynet') radioAynet.checked = true;
+    else if (appConfig.network === 'custom') radioCustom.checked = true;
+    else radioMilli.checked = true;
 
-    const btnTestConn = document.getElementById('btnTestConn');
-    const testConnResult = document.getElementById('testConnResult');
+    testConnResult.style.display = 'none';
+    fetchModelsStatus.style.display = 'none';
+    settingsModal.style.display = 'flex';
+  }
 
-    btnTestConn.addEventListener('click', async () => {
-      const apiKeyVal = cfgApiKey.value.trim();
-      if (!apiKeyVal) {
-        testConnResult.style.display = 'block';
-        testConnResult.style.background = 'rgba(239, 68, 68, 0.15)';
-        testConnResult.style.border = '1px solid rgba(239, 68, 68, 0.4)';
-        testConnResult.style.color = '#fca5a5';
-        testConnResult.innerHTML = '⚠️ Lütfen önce API Key bilginizi girin.';
-        return;
-      }
+  function closeSettingsModal() {
+    settingsModal.style.display = 'none';
+  }
 
-      btnTestConn.disabled = true;
-      btnTestConn.textContent = '⏳ Test Ediliyor...';
-      testConnResult.style.display = 'block';
-      testConnResult.style.background = 'rgba(59, 130, 246, 0.15)';
-      testConnResult.style.border = '1px solid rgba(59, 130, 246, 0.4)';
-      testConnResult.style.color = '#93c5fd';
-      testConnResult.innerHTML = 'ASELSAN LLM Suite Flow çağrılıyor...';
+  function saveSettingsFromModal() {
+    let network = 'milli';
+    if (radioAynet.checked) network = 'aynet';
+    else if (radioCustom.checked) network = 'custom';
 
-      try {
-        const resp = await fetch('/api/flow/test-connection', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            base_url: cfgBaseUrl.value.trim() || appConfig.baseUrl,
-            flow_id: cfgFlowId.value.trim() || appConfig.flowId,
-            api_key: apiKeyVal
-          })
+    appConfig.network = network;
+    appConfig.baseUrl = cfgBaseUrl.value.trim() || NETWORK_URLS.milli;
+    appConfig.apiKey = cfgApiKey.value.trim();
+    appConfig.model = cfgModelSelect.value || 'aselix-llm-v1';
+
+    saveConfig();
+    applyConfigToUI();
+    closeSettingsModal();
+  }
+
+  function resetSettingsToDefault() {
+    appConfig = { ...DEFAULT_CONFIG };
+    saveConfig();
+    applyConfigToUI();
+    openSettingsModal();
+  }
+
+  function toggleApiKeyVisibility() {
+    if (cfgApiKey.type === 'password') {
+      cfgApiKey.type = 'text';
+      btnToggleApiKey.textContent = 'Gizle';
+    } else {
+      cfgApiKey.type = 'password';
+      btnToggleApiKey.textContent = 'Göster';
+    }
+  }
+
+  async function fetchModelsFromApi() {
+    btnFetchModels.disabled = true;
+    btnFetchModels.textContent = '⏳ Çekiliyor...';
+    fetchModelsStatus.style.display = 'none';
+
+    try {
+      const resp = await fetch('/api/aselix/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_url: cfgBaseUrl.value.trim(),
+          api_key: cfgApiKey.value.trim()
+        })
+      });
+
+      const data = await resp.json();
+      btnFetchModels.disabled = false;
+      btnFetchModels.textContent = '🔄 Modelleri Listele / Getir';
+
+      if (data.modeller && data.modeller.length > 0) {
+        cfgModelSelect.innerHTML = '';
+        data.modeller.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = m;
+          if (m === appConfig.model) opt.selected = true;
+          cfgModelSelect.appendChild(opt);
         });
 
-        const data = await resp.json();
-        btnTestConn.disabled = false;
-        btnTestConn.textContent = '⚡ Bağlantıyı Test Et';
+        fetchModelsStatus.style.display = 'block';
+        fetchModelsStatus.style.background = 'rgba(16, 185, 129, 0.15)';
+        fetchModelsStatus.style.color = '#34d399';
+        fetchModelsStatus.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+        fetchModelsStatus.textContent = `✓ ${data.modeller.length} model listelendi (${data.kaynak === 'canli_api' ? 'Canlı API' : 'Önbellek'}).`;
+      } else {
+        fetchModelsStatus.style.display = 'block';
+        fetchModelsStatus.style.background = 'rgba(239, 68, 68, 0.15)';
+        fetchModelsStatus.style.color = '#f87171';
+        fetchModelsStatus.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+        fetchModelsStatus.textContent = `Uyarı: ${data.mesaj}`;
+      }
+    } catch (e) {
+      btnFetchModels.disabled = false;
+      btnFetchModels.textContent = '🔄 Modelleri Listele / Getir';
+      fetchModelsStatus.style.display = 'block';
+      fetchModelsStatus.style.background = 'rgba(239, 68, 68, 0.15)';
+      fetchModelsStatus.style.color = '#f87171';
+      fetchModelsStatus.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+      fetchModelsStatus.textContent = `Hata: ${e.message}`;
+    }
+  }
 
-        if (data.durum === 'basarili') {
-          testConnResult.style.background = 'rgba(16, 185, 129, 0.15)';
-          testConnResult.style.border = '1px solid rgba(16, 185, 129, 0.4)';
-          testConnResult.style.color = '#6ee7b7';
-          testConnResult.innerHTML = `<strong>✅ Bağlantı Başarılı!</strong><br><span style="font-size:12px;">Model Yanıtı: ${escapeHtml(data.cevap || 'OK')}</span>`;
-        } else {
-          testConnResult.style.background = 'rgba(239, 68, 68, 0.15)';
-          testConnResult.style.border = '1px solid rgba(239, 68, 68, 0.4)';
-          testConnResult.style.color = '#fca5a5';
-          testConnResult.innerHTML = `<strong>❌ Bağlantı Başarısız:</strong><br><span style="font-size:12px;">${escapeHtml(data.mesaj || 'Bilinmeyen hata')}</span>`;
-        }
-      } catch (err) {
-        btnTestConn.disabled = false;
-        btnTestConn.textContent = '⚡ Bağlantıyı Test Et';
+  async function testApiConnection() {
+    btnTestConn.disabled = true;
+    btnTestConn.textContent = '⏳ Test Ediliyor...';
+    testConnResult.style.display = 'none';
+
+    try {
+      const resp = await fetch('/api/aselix/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_url: cfgBaseUrl.value.trim(),
+          api_key: cfgApiKey.value.trim(),
+          model: cfgModelSelect.value || 'aselix-llm-v1',
+          messages: [{ role: 'user', content: 'Merhaba, bağlantı testi. 1 cümle ile teyit et.' }]
+        })
+      });
+
+      const data = await resp.json();
+      btnTestConn.disabled = false;
+      btnTestConn.textContent = '⚡ API Testi Yap';
+
+      testConnResult.style.display = 'block';
+      if (data.durum === 'basarili') {
+        testConnResult.style.background = 'rgba(16, 185, 129, 0.15)';
+        testConnResult.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+        testConnResult.style.color = '#34d399';
+        testConnResult.innerHTML = `<strong>✓ Bağlantı Başarılı!</strong><br><small>${escapeHtml(data.cevap)}</small>`;
+      } else {
         testConnResult.style.background = 'rgba(239, 68, 68, 0.15)';
         testConnResult.style.border = '1px solid rgba(239, 68, 68, 0.4)';
-        testConnResult.style.color = '#fca5a5';
-        testConnResult.innerHTML = `<strong>❌ Sunucu Hatası:</strong> ${escapeHtml(err.message)}`;
+        testConnResult.style.color = '#f87171';
+        testConnResult.innerHTML = `<strong>⚠️ Bağlantı Yanıtı:</strong><br><small>${escapeHtml(data.mesaj || 'Ulaşılamadı')}</small>`;
       }
-    });
-
-    settingsModal.addEventListener('click', (e) => {
-      if (e.target === settingsModal) {
-        settingsModal.style.display = 'none';
-      }
-    });
-
-    btnToggleApiKey.addEventListener('click', () => {
-      if (cfgApiKey.type === 'password') {
-        cfgApiKey.type = 'text';
-        btnToggleApiKey.textContent = 'Gizle';
-      } else {
-        cfgApiKey.type = 'password';
-        btnToggleApiKey.textContent = 'Göster';
-      }
-    });
-
-    btnResetSettings.addEventListener('click', () => {
-      cfgBaseUrl.value = DEFAULT_CONFIG.baseUrl;
-      cfgFlowId.value = DEFAULT_CONFIG.flowId;
-      cfgApiKey.value = '';
-      cfgTweaksInput.value = DEFAULT_CONFIG.tweaksInput;
-    });
-
-    btnSaveSettings.addEventListener('click', () => {
-      appConfig = {
-        baseUrl: cfgBaseUrl.value.trim() || DEFAULT_CONFIG.baseUrl,
-        flowId: cfgFlowId.value.trim() || DEFAULT_CONFIG.flowId,
-        apiKey: cfgApiKey.value.trim(),
-        tweaksInput: cfgTweaksInput.value.trim() || DEFAULT_CONFIG.tweaksInput
-      };
-      saveConfig(appConfig);
-      settingsModal.style.display = 'none';
-      updateFlowStatusPill();
-      alert('Ayarlar kaydedildi!');
-    });
-  }
-
-  function loadConfig() {
-    try {
-      const stored = localStorage.getItem('aselsan_flow_config');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.tweaksInput === 'ChatInput-jugL4') {
-          parsed.tweaksInput = '';
-        }
-        return { ...DEFAULT_CONFIG, ...parsed };
-      }
-    } catch (e) { }
-    return { ...DEFAULT_CONFIG };
-  }
-
-  function saveConfig(cfg) {
-    try {
-      localStorage.setItem('aselsan_flow_config', JSON.stringify(cfg));
-    } catch (e) { }
-  }
-
-  function updateFlowStatusPill() {
-    const pill = document.getElementById('flowStatusPill');
-    const label = pill.querySelector('.status-label');
-    if (appConfig.apiKey) {
-      label.textContent = 'LLM Flow (API Hazır)';
-      pill.style.borderColor = 'rgba(16, 185, 129, 0.4)';
-    } else {
-      label.textContent = 'LLM Suite Flow';
-      pill.style.borderColor = 'var(--border-subtle)';
+    } catch (e) {
+      btnTestConn.disabled = false;
+      btnTestConn.textContent = '⚡ API Testi Yap';
+      testConnResult.style.display = 'block';
+      testConnResult.style.background = 'rgba(239, 68, 68, 0.15)';
+      testConnResult.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+      testConnResult.style.color = '#f87171';
+      testConnResult.innerHTML = `<strong>⚠️ Test Hatası:</strong><br><small>${escapeHtml(e.message)}</small>`;
     }
   }
 
   // --------------------------------------------------------------------------
-  // Utility: Markdown to Simple Safe HTML
+  // Utility Functions
   // --------------------------------------------------------------------------
+  function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function csvEscape(text) {
+    if (!text) return '';
+    return String(text).replace(/"/g, '""');
+  }
+
+  function truncateStr(str, n) {
+    return (str && str.length > n) ? str.substr(0, n - 1) + '…' : (str || '');
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
   function markdownToHtml(md) {
     if (!md) return '';
     let html = escapeHtml(md);
 
-    // Headers
-    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-
-    // Bold & Italic
-    html = html.replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>');
-    html = html.replace(/\*(.*?)\*/gim, '<em>$1</em>');
-
-    // Code blocks & inline code
-    html = html.replace(/`([^`]+)`/gim, '<code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px;">$1</code>');
-
-    // Lists
-    html = html.replace(/^\s*[-•*]\s+(.*$)/gim, '<li>$1</li>');
+    // Bold
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // Italic
+    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    // Bullet list items
+    html = html.replace(/^[•\-\*]\s+(.*)$/gm, '<li>$1</li>');
     html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
-
-    // Numbered lists
-    html = html.replace(/^\s*\d+\.\s+(.*$)/gim, '<li>$1</li>');
-
-    // Line breaks to paragraphs
+    // Numbered list items
+    html = html.replace(/^(\d+)\.\s+(.*)$/gm, '<li><strong>$1.</strong> $2</li>');
+    // Paragraphs
     html = html.split('\n\n').map(p => {
-      p = p.trim();
-      if (!p) return '';
-      if (p.startsWith('<h1>') || p.startsWith('<h2>') || p.startsWith('<h3>') || p.startsWith('<ul>') || p.startsWith('<ol>')) {
-        return p;
-      }
+      if (p.startsWith('<ul>') || p.startsWith('<li>')) return p;
       return `<p>${p.replace(/\n/g, '<br>')}</p>`;
     }).join('');
 
     return html;
   }
 
-  function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  function generateUUID() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-      const r = Math.random() * 16 | 0;
-      const v = c === 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
-  }
-
-  // Run on DOM ready
+  // Start the application
   document.addEventListener('DOMContentLoaded', init);
+
 })();
