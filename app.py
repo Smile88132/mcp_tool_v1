@@ -11,11 +11,17 @@ Ortam Özellikleri:
 
 import os
 import sys
+import io
 import json
+import uuid
 import argparse
 import unicodedata
 from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
+import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==============================================================================
 # Windows / Anaconda DLL Yükleme Düzeltmesi (win32api DLL load failed fix)
@@ -197,8 +203,18 @@ def resolve_columns(
     return act_col, phase_col, issue_col
 
 
-def read_excel_safe(file_path: Optional[str] = None, sheet_name: Optional[str] = None) -> pd.DataFrame:
-    """Excel dosyasını güvenli şekilde okur. Belirtilmezse proje klasöründeki Uygunsuzluk.xlsx dosyasını otomatik kullanır."""
+def read_excel_safe(file_path: Optional[Any] = None, sheet_name: Optional[str] = None) -> pd.DataFrame:
+    """Excel dosyasını, bayt verisini veya DataFrame'i güvenli şekilde okur. Belirtilmezse varsayılan dosyayı kullanır."""
+    if isinstance(file_path, pd.DataFrame):
+        return file_path.copy()
+
+    if isinstance(file_path, bytes):
+        bio = io.BytesIO(file_path)
+        return pd.read_excel(bio, sheet_name=sheet_name) if sheet_name else pd.read_excel(bio)
+
+    if hasattr(file_path, "read"):
+        return pd.read_excel(file_path, sheet_name=sheet_name) if sheet_name else pd.read_excel(file_path)
+
     if not file_path or str(file_path).strip() == "":
         candidates = ["Uygunsuzluk.xlsx", "ornek_uygunsuzluklar.xlsx"]
         found = None
@@ -215,31 +231,33 @@ def read_excel_safe(file_path: Optional[str] = None, sheet_name: Optional[str] =
         else:
             raise FileNotFoundError("Excel dosya yolu belirtilmedi ve varsayılan 'Uygunsuzluk.xlsx' dosyası bulunamadı.")
 
-    if not os.path.isabs(file_path):
-        file_path = os.path.abspath(file_path)
+    file_str = str(file_path)
+    if not os.path.isabs(file_str):
+        file_str = os.path.abspath(file_str)
 
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Belirtilen dosya bulunamadı: '{file_path}'")
+    if not os.path.exists(file_str):
+        raise FileNotFoundError(f"Belirtilen dosya bulunamadı: '{file_str}'")
 
-    if not os.path.isfile(file_path):
-        raise ValueError(f"Belirtilen yol bir dosya değil: '{file_path}'")
+    if not os.path.isfile(file_str):
+        raise ValueError(f"Belirtilen yol bir dosya değil: '{file_str}'")
 
     valid_extensions = (".xlsx", ".xls", ".xlsm")
-    if not file_path.lower().endswith(valid_extensions):
-        raise ValueError(f"Geçersiz dosya uzantısı. Desteklenen uzantılar: {valid_extensions}. Verilen: '{file_path}'")
+    if not file_str.lower().endswith(valid_extensions):
+        raise ValueError(f"Geçersiz dosya uzantısı. Desteklenen uzantılar: {valid_extensions}. Verilen: '{file_str}'")
 
     try:
         if sheet_name:
-            df = pd.read_excel(file_path, sheet_name=sheet_name)
+            df = pd.read_excel(file_str, sheet_name=sheet_name)
         else:
-            df = pd.read_excel(file_path)
+            df = pd.read_excel(file_str)
     except Exception as e:
         raise RuntimeError(f"Excel dosyası okunurken hata oluştu: {str(e)}")
 
     if df.empty:
-        raise ValueError(f"Excel dosyası ('{file_path}') boş veri içeriyor.")
+        raise ValueError(f"Excel dosyası ('{file_str}') boş veri içeriyor.")
 
     return df
+
 
 
 def categorize_phase(raw_phase: str) -> str:
@@ -603,25 +621,275 @@ def preview_excel_data(file_path: str, max_rows: int = 5, sheet_name: Optional[s
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
+def execute_compare_two_excels(
+    file_1: Any,
+    file_2: Any,
+    file_1_name: str = "1. Belge",
+    file_2_name: str = "2. Belge",
+    column_name: Optional[str] = None,
+    sheet_name_1: Optional[str] = None,
+    sheet_name_2: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    İki farklı Excel dosyasını okuyarak uygunsuzluklar arasındaki Venn küme matematiğini
+    (yalnızca 1, yalnızca 2, ortak kesişim, Jaccard benzerliği) hesaplar.
+    """
+    try:
+        df1 = read_excel_safe(file_1, sheet_name=sheet_name_1)
+        df2 = read_excel_safe(file_2, sheet_name=sheet_name_2)
+
+        col1 = None
+        col2 = None
+
+        if column_name and str(column_name).strip() and column_name != "auto":
+            norm_req = normalize_str(column_name)
+            for c in df1.columns:
+                if normalize_str(c) == norm_req or norm_req in normalize_str(c):
+                    col1 = c
+                    break
+            for c in df2.columns:
+                if normalize_str(c) == norm_req or norm_req in normalize_str(c):
+                    col2 = c
+                    break
+
+        if not col1:
+            try:
+                _, _, col1 = resolve_columns(df1)
+            except Exception:
+                col1 = df1.columns[0]
+
+        if not col2:
+            try:
+                _, _, col2 = resolve_columns(df2)
+            except Exception:
+                col2 = df2.columns[0]
+
+        items_1_raw = df1[col1].dropna().astype(str).tolist()
+        items_2_raw = df2[col2].dropna().astype(str).tolist()
+
+        set_a = {clean_text_content(x) for x in items_1_raw if clean_text_content(x)}
+        set_b = {clean_text_content(x) for x in items_2_raw if clean_text_content(x)}
+
+        only_a = set_a - set_b
+        only_b = set_b - set_a
+        intersection = set_a & set_b
+        total_union = set_a | set_b
+        jaccard = round(len(intersection) / len(total_union), 4) if total_union else 0.0
+
+        summary_note = (
+            f"'{file_1_name}' ({len(set_a)} benzersiz kayıt) ile '{file_2_name}' ({len(set_b)} benzersiz kayıt) kıyaslandı. "
+            f"Toplam {len(total_union)} farklı uygunsuzluk tespit edildi. "
+            f"{len(intersection)} uygunsuzluk her iki belgede de ortaktır (Jaccard Benzerlik Oranı: %{round(jaccard * 100, 1)}). "
+            f"{len(only_a)} uygunsuzluk yalnızca 1. belgede, {len(only_b)} uygunsuzluk ise yalnızca 2. belgede yer almaktadır."
+        )
+
+        return {
+            "durum": "basarili",
+            "dosya_1_adi": file_1_name,
+            "dosya_2_adi": file_2_name,
+            "karsilastirilan_sutun_1": col1,
+            "karsilastirilan_sutun_2": col2,
+            "ozet_yorum": summary_note,
+            "venn_verileri": {
+                "only_a_count": len(only_a),
+                "intersection_count": len(intersection),
+                "only_b_count": len(only_b),
+                "total_unique": len(total_union),
+                "jaccard_similarity": jaccard,
+                "only_a_items": sorted(list(only_a)),
+                "intersection_items": sorted(list(intersection)),
+                "only_b_items": sorted(list(only_b)),
+            }
+        }
+    except Exception as e:
+        return {
+            "durum": "hata",
+            "hata_turu": type(e).__name__,
+            "mesaj": str(e)
+        }
+
+
+def compare_two_excels_venn(
+    file_path_a: str,
+    file_path_b: str,
+    column_name: Optional[str] = None,
+    sheet_name_a: Optional[str] = None,
+    sheet_name_b: Optional[str] = None
+) -> str:
+    """İki farklı Excel dosyasını Venn şeması küme matematiği ile kıyaslayan MCP aracı."""
+    res = execute_compare_two_excels(
+        file_1=file_path_a,
+        file_2=file_path_b,
+        file_1_name=os.path.basename(file_path_a),
+        file_2_name=os.path.basename(file_path_b),
+        column_name=column_name,
+        sheet_name_1=sheet_name_a,
+        sheet_name_2=sheet_name_b
+    )
+    return json.dumps(res, ensure_ascii=False, indent=2)
+
+
+def extract_langflow_response(data: Any) -> str:
+    """Langflow / LLM Suite Flow JSON çıktısından mesaj metnini ayıklar."""
+    if not isinstance(data, dict):
+        return str(data)
+
+    try:
+        outputs = data.get("outputs", [])
+        if outputs and isinstance(outputs, list):
+            first_out = outputs[0]
+            sub_outputs = first_out.get("outputs", [])
+            if sub_outputs and isinstance(sub_outputs, list):
+                first_sub = sub_outputs[0]
+                res_dict = first_sub.get("results", {})
+                msg_obj = res_dict.get("message", {})
+                if isinstance(msg_obj, dict) and "text" in msg_obj:
+                    return str(msg_obj["text"])
+                if isinstance(msg_obj, str) and msg_obj.strip():
+                    return msg_obj
+
+                messages = first_sub.get("messages", [])
+                if messages and isinstance(messages, list):
+                    last_msg = messages[-1]
+                    if isinstance(last_msg, dict):
+                        if "message" in last_msg and last_msg["message"]:
+                            return str(last_msg["message"])
+                        if "text" in last_msg and last_msg["text"]:
+                            return str(last_msg["text"])
+
+                artifacts = first_sub.get("artifacts", {})
+                if isinstance(artifacts, dict) and "message" in artifacts:
+                    return str(artifacts["message"])
+    except Exception:
+        pass
+
+    for k in ["result", "output", "text", "message", "response"]:
+        if k in data and isinstance(data[k], str) and data[k].strip():
+            return data[k]
+
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def call_aselsan_llm_suite_flow(
+    base_url: str = "https://llmsuiteflow.aiplatform.aselsan.com.tr",
+    flow_id: str = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a",
+    api_key: Optional[str] = None,
+    tweaks_input: str = "ChatInput-jugL4",
+    uploaded_files: Optional[List[Tuple[str, bytes]]] = None,
+    prompt_text: str = "",
+    session_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    ASELSAN AI Platform LLM Suite Flow API'sini çağırır.
+    Dosyaları upload endpoint'ine yükler ve flow çalıştırma isteği yapar.
+    """
+    if not base_url:
+        base_url = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
+    base_url = base_url.rstrip("/")
+
+    if not flow_id:
+        flow_id = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
+
+    headers = {}
+    if api_key and str(api_key).strip():
+        headers["x-api-key"] = str(api_key).strip()
+
+    uploaded_file_paths = []
+
+    if headers and uploaded_files:
+        upload_url = f"{base_url}/api/v1/files/upload/{flow_id}"
+        for fname, fbytes in uploaded_files:
+            try:
+                files_data = {
+                    "file": (
+                        fname,
+                        io.BytesIO(fbytes),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                }
+                up_resp = requests.post(upload_url, headers=headers, files=files_data, timeout=25, verify=False)
+                if up_resp.status_code in [200, 201]:
+                    up_json = up_resp.json()
+                    fpath = up_json.get("file_path") or up_json.get("path") or up_json.get("name")
+                    if fpath:
+                        uploaded_file_paths.append(fpath)
+            except Exception:
+                pass
+
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
+    payload = {
+        "output_type": "chat",
+        "input_type": "chat",
+        "input_value": prompt_text,
+        "session_id": session_id,
+        "tweaks": {}
+    }
+
+    if tweaks_input:
+        payload["tweaks"][tweaks_input] = {
+            "files": uploaded_file_paths,
+            "input_value": ""
+        }
+
+    run_url = f"{base_url}/api/v1/run/{flow_id}"
+    req_headers = {"Content-Type": "application/json", **headers}
+
+    if not headers:
+        return {
+            "durum": "bilgi",
+            "session_id": session_id,
+            "cevap": (
+                "### 📌 Matematiksel Venn Şeması ve Küme Analizi Hazır!\n\n"
+                "İki Excel dosyasındaki uygunsuzluklar başarıyla karşılaştırıldı ve görsel Venn şeması oluşturuldu.\n\n"
+                "**ASELSAN LLM Suite Flow Bağlantısı:**\n"
+                f"- **Hedef Akış:** `{base_url}/api/v1/run/{flow_id}`\n"
+                f"- **Bileşen:** `{tweaks_input}`\n\n"
+                "Akıllı yapay zeka yorumu, kök neden analizi ve risk sınıflandırmasını almak için sağ üst köşedeki "
+                "**⚙️ Ayarlar** butonuna tıklayarak **API Key (x-api-key)** bilginizi kaydedebilirsiniz."
+            )
+        }
+
+    try:
+        resp = requests.post(run_url, headers=req_headers, json=payload, timeout=90, verify=False)
+        resp.raise_for_status()
+        res_json = resp.json()
+        extracted_text = extract_langflow_response(res_json)
+        return {
+            "durum": "basarili",
+            "session_id": session_id,
+            "cevap": extracted_text,
+            "raw": res_json
+        }
+    except requests.exceptions.RequestException as req_err:
+        return {
+            "durum": "hata",
+            "mesaj": f"ASELSAN LLM Suite Flow bağlantı hatası: {str(req_err)}",
+            "session_id": session_id
+        }
+
+
 # ==============================================================================
 # AĞDAKİ HERKESE AÇIK HTTP WEB SERVİSİ (FastAPI / Starlette)
 # ==============================================================================
 
 try:
-    from fastapi import FastAPI, Request, Response
+    from fastapi import FastAPI, Request, Response, UploadFile, File, Form
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
 
     web_app = FastAPI(
-        title="Venn Diagram Nonconformity Analysis API & MCP Server",
+        title="VennFlow AI - Excel Kıyaslama ve Venn Analiz Sunucusu",
         description=(
             "Intranet ortamında Excel verilerini Venn Şeması küme matematiği ile analiz eden REST API & MCP Server.\n\n"
-            "Ağdaki tüm LLM'ler (LibreChat, AnythingLLM, LM Studio, Open-WebUI vb.) ve web tarayıcıları doğrudan bağlanabilir."
+            "ASELSAN AI Platform LLM Suite Flow (Langflow) entegrasyonu ile akıllı yapay zeka yorumları üretir."
         ),
-        version="1.2.0"
+        version="2.0.0"
     )
 
-    # CORS Desteği (Tarayıcı ve web tabanlı LLM Suite istemcileri için zorunlu)
     web_app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -630,30 +898,51 @@ try:
         allow_headers=["*"],
     )
 
-    class AnalyzeRequest(BaseModel):
-        file_path: Optional[str] = Field(None, description="Excel dosyasının yolu (boş bırakılırsa Uygunsuzluk.xlsx kullanılır)")
-        compare_by: str = Field("phases", description="'phases' (fazlar arası) veya 'activities' (faaliyetler/iller arası)")
-        activity_name: Optional[str] = Field(None, description="Yalnızca belirli bir ili/faaliyeti analiz etmek için (örn: 'kayseri')")
-        sheet_name: Optional[str] = Field(None, description="Opsiyonel çalışma sayfası adı")
-        activity_column: Optional[str] = Field(None, description="Opsiyonel özel faaliyet/il sütunu")
-        phase_column: Optional[str] = Field(None, description="Opsiyonel özel faz sütunu")
-        issue_column: Optional[str] = Field(None, description="Opsiyonel özel uygunsuzluk sütunu")
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    if os.path.exists(static_dir):
+        web_app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-    @web_app.get("/")
-    def index():
-        return {
-            "servis": "Venn Şeması Uygunsuzluk Analiz Servisi & MCP Server (Intranet)",
-            "durum": "aktif",
-            "ag_erisim_adresi": "http://0.0.0.0:8000",
-            "mcp_http_endpoint": "/mcp",
-            "interaktif_swagger_arayuzu": "/docs",
-            "endpoints": {
-                "POST /mcp": "LLM Suite Model Context Protocol HTTP Endpoint",
-                "POST /api/analyze": "Venn Şeması küme analizi",
-                "GET /api/activities": "Mevcut faaliyetler ve fazlar",
-                "GET /api/preview": "Excel önizleme"
-            }
-        }
+    class AnalyzeRequest(BaseModel):
+        file_path: Optional[str] = Field(None, description="Excel dosyasının yolu")
+        compare_by: str = Field("phases", description="'phases' veya 'activities'")
+        activity_name: Optional[str] = Field(None, description="Opsiyonel faaliyet adı")
+        sheet_name: Optional[str] = Field(None, description="Opsiyonel sayfa adı")
+        activity_column: Optional[str] = Field(None)
+        phase_column: Optional[str] = Field(None)
+        issue_column: Optional[str] = Field(None)
+
+    class FlowChatRequest(BaseModel):
+        message: str
+        session_id: Optional[str] = None
+        base_url: Optional[str] = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
+        flow_id: Optional[str] = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
+        api_key: Optional[str] = ""
+        tweaks_input: Optional[str] = "ChatInput-jugL4"
+        context: Optional[Dict[str, Any]] = None
+
+    class SampleCompareRequest(BaseModel):
+        base_url: Optional[str] = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
+        flow_id: Optional[str] = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
+        api_key: Optional[str] = ""
+        tweaks_input: Optional[str] = "ChatInput-jugL4"
+
+    @web_app.get("/", response_class=HTMLResponse)
+    async def index(request: Request):
+        accept_header = request.headers.get("accept", "")
+        if "application/json" in accept_header and "text/html" not in accept_header:
+            return JSONResponse({
+                "servis": "VennFlow AI - Excel Kıyaslama ve Venn Analiz Sunucusu",
+                "durum": "aktif",
+                "ag_erisim_adresi": "http://0.0.0.0:8000",
+                "mcp_http_endpoint": "/mcp",
+                "interaktif_swagger_arayuzu": "/docs",
+                "web_arayuzu": "http://0.0.0.0:8000/"
+            })
+
+        index_file = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_file):
+            return FileResponse(index_file)
+        return HTMLResponse("<h1>VennFlow AI Web Arayüzü Hazır!</h1>")
 
     @web_app.get("/mcp")
     def mcp_get_status():
@@ -682,6 +971,141 @@ try:
     @web_app.get("/api/preview")
     def api_preview(file_path: Optional[str] = None, max_rows: int = 5, sheet_name: Optional[str] = None):
         return execute_preview_excel_data(file_path=file_path or "", max_rows=max_rows, sheet_name=sheet_name)
+
+    @web_app.post("/api/flow/compare")
+    async def api_flow_compare(
+        file_1: UploadFile = File(...),
+        file_2: UploadFile = File(...),
+        base_url: str = Form("https://llmsuiteflow.aiplatform.aselsan.com.tr"),
+        flow_id: str = Form("c16ecc83-ff64-4fc7-bb52-0f594beaf70a"),
+        api_key: Optional[str] = Form(""),
+        tweaks_input: str = Form("ChatInput-jugL4"),
+        column_name: Optional[str] = Form(None)
+    ):
+        """İki Excel dosyasını alır, yerel Venn matematiğini hesaplar ve ASELSAN Flow'u çağırarak analiz üretir."""
+        file_1_bytes = await file_1.read()
+        file_2_bytes = await file_2.read()
+
+        comp_res = execute_compare_two_excels(
+            file_1=file_1_bytes,
+            file_2=file_2_bytes,
+            file_1_name=file_1.filename or "1. Belge",
+            file_2_name=file_2.filename or "2. Belge",
+            column_name=column_name
+        )
+
+        if comp_res.get("durum") != "basarili":
+            return comp_res
+
+        v = comp_res["venn_verileri"]
+
+        sample_common = "\n- ".join(v["intersection_items"][:10])
+        sample_only_a = "\n- ".join(v["only_a_items"][:8])
+        sample_only_b = "\n- ".join(v["only_b_items"][:8])
+
+        prompt = (
+            f"Ekteki iki Excel dosyasındaki uygunsuzluk verileri başarıyla karşılaştırıldı:\n\n"
+            f"• 1. Belge ({file_1.filename}): Toplam {v['only_a_count'] + v['intersection_count']} uygunsuzluk.\n"
+            f"• 2. Belge ({file_2.filename}): Toplam {v['only_b_count'] + v['intersection_count']} uygunsuzluk.\n"
+            f"• Ortak Kesişim (Her iki belgede tekrarlayan): {v['intersection_count']} uygunsuzluk.\n"
+            f"• Yalnızca 1. Belgede olan (2. belgede çözülmüş): {v['only_a_count']} uygunsuzluk.\n"
+            f"• Yalnızca 2. Belgede olan (Yeni ortaya çıkan): {v['only_b_count']} uygunsuzluk.\n"
+            f"• Jaccard Benzerlik İndeksi: %{round(v['jaccard_similarity'] * 100, 1)}\n\n"
+            f"Örnek Ortak Uygunsuzluklar:\n- {sample_common or 'Yok'}\n\n"
+            f"Örnek Yeni Ortaya Çıkanlar (Yalnızca 2. Belge):\n- {sample_only_b or 'Yok'}\n\n"
+            f"Örnek Çözülenler (Yalnızca 1. Belge):\n- {sample_only_a or 'Yok'}\n\n"
+            f"Lütfen bir Sistem Mühendisi ve Kalite Güvence Uzmanı olarak:\n"
+            f"1. Kronik tekrarlayan ortak uygunsuzlukların kök neden risk analizini yap.\n"
+            f"2. Yeni ortaya çıkan beklenmedik sapmaları değerlendir.\n"
+            f"3. Kalite ve test ekiplerinin derhal alması gereken 3 somut önleyici aksiyon önerisi sun.\n"
+            f"Yanıtını profesyonel, maddeler halinde ve yönetici özeti şeklinde yapılandır."
+        )
+
+        flow_res = call_aselsan_llm_suite_flow(
+            base_url=base_url,
+            flow_id=flow_id,
+            api_key=api_key,
+            tweaks_input=tweaks_input,
+            uploaded_files=[
+                (file_1.filename or "file_1.xlsx", file_1_bytes),
+                (file_2.filename or "file_2.xlsx", file_2_bytes)
+            ],
+            prompt_text=prompt
+        )
+
+        comp_res["flow_analiz_ozeti"] = flow_res.get("cevap") or flow_res.get("mesaj") or ""
+        comp_res["session_id"] = flow_res.get("session_id")
+        comp_res["flow_durum"] = flow_res.get("durum")
+        return comp_res
+
+    @web_app.post("/api/flow/sample-compare")
+    async def api_flow_sample_compare(req: SampleCompareRequest):
+        """Hazır ornek_uygunsuzluklar.xlsx üzerinden örnek iki test fazını (Dry-run vs SKT) kıyaslar."""
+        sample_path = os.path.abspath("ornek_uygunsuzluklar.xlsx")
+        if not os.path.exists(sample_path):
+            sample_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ornek_uygunsuzluklar.xlsx")
+
+        if not os.path.exists(sample_path):
+            return {"durum": "hata", "mesaj": "Örnek Excel dosyası bulunamadı."}
+
+        df = pd.read_excel(sample_path)
+        dry_df = df[df["Faz"].astype(str).str.contains("Dry", case=False, na=False)]
+        skt_df = df[df["Faz"].astype(str).str.contains("SKT|Saha", case=False, na=False)]
+
+        comp_res = execute_compare_two_excels(
+            file_1=dry_df,
+            file_2=skt_df,
+            file_1_name="Ornek_Faz1_DryRun.xlsx",
+            file_2_name="Ornek_Faz2_SKT.xlsx",
+            column_name="Uygunsuzluk"
+        )
+
+        v = comp_res["venn_verileri"]
+        prompt = (
+            f"Ekteki iki test fazındaki uygunsuzluklar karşılaştırıldı:\n"
+            f"Dry-run ({v['only_a_count'] + v['intersection_count']} uygunsuzluk) vs SKT ({v['only_b_count'] + v['intersection_count']} uygunsuzluk).\n"
+            f"Ortak Kesişim: {v['intersection_count']} adet.\n"
+            f"Yalnızca Dry-run'da olup SKT'de çözülen: {v['only_a_count']} adet.\n"
+            f"SKT'de ilk kez ortaya çıkan: {v['only_b_count']} adet.\n"
+            f"Lütfen kalite mühendisliği açısından bir değerlendirme özeti sun."
+        )
+
+        flow_res = call_aselsan_llm_suite_flow(
+            base_url=req.base_url or "https://llmsuiteflow.aiplatform.aselsan.com.tr",
+            flow_id=req.flow_id or "c16ecc83-ff64-4fc7-bb52-0f594beaf70a",
+            api_key=req.api_key,
+            tweaks_input=req.tweaks_input or "ChatInput-jugL4",
+            prompt_text=prompt
+        )
+
+        comp_res["flow_analiz_ozeti"] = flow_res.get("cevap") or flow_res.get("mesaj") or ""
+        comp_res["session_id"] = flow_res.get("session_id")
+        comp_res["flow_durum"] = flow_res.get("durum")
+        return comp_res
+
+    @web_app.post("/api/flow/chat")
+    async def api_flow_chat(req: FlowChatRequest):
+        """Kullanıcının kıyaslanan veriler hakkında Flow Chatbot ile sohbet etmesini sağlar."""
+        context_str = ""
+        if req.context:
+            context_str = (
+                f"[Önceki Kıyaslama Bağlamı: {req.context.get('dosya_1')} ve {req.context.get('dosya_2')}. "
+                f"Ortak Hatalar: {req.context.get('intersection_count')}, Yalnızca 1: {req.context.get('only_a_count')}, "
+                f"Yalnızca 2: {req.context.get('only_b_count')}]\n\n"
+            )
+
+        full_prompt = f"{context_str}Kullanıcı Sorusu: {req.message}"
+
+        flow_res = call_aselsan_llm_suite_flow(
+            base_url=req.base_url or "https://llmsuiteflow.aiplatform.aselsan.com.tr",
+            flow_id=req.flow_id or "c16ecc83-ff64-4fc7-bb52-0f594beaf70a",
+            api_key=req.api_key,
+            tweaks_input=req.tweaks_input or "ChatInput-jugL4",
+            prompt_text=full_prompt,
+            session_id=req.session_id
+        )
+
+        return flow_res
 
     # --------------------------------------------------------------------------
     # MODEL CONTEXT PROTOCOL (MCP) JSON-RPC 2.0 HTTP İŞLEYİCİSİ
@@ -791,6 +1215,28 @@ try:
                                 },
                                 "required": []
                             }
+                        },
+                        {
+                            "name": "compare_two_excels_venn",
+                            "description": "İki farklı Excel dosyasını (örneğin iki ayrı test aşaması veya versiyonu) karşılaştırarak Venn şeması küme analizi (yalnızca A, yalnızca B, ortak kesişim ve Jaccard benzerliği) yapar.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "file_path_a": {
+                                        "type": "string",
+                                        "description": "1. Excel dosyasının mutlak yolu"
+                                    },
+                                    "file_path_b": {
+                                        "type": "string",
+                                        "description": "2. Excel dosyasının mutlak yolu"
+                                    },
+                                    "column_name": {
+                                        "type": "string",
+                                        "description": "Kıyaslanacak uygunsuzluk sütun adı (belirtilmezse otomatik tespit edilir)"
+                                    }
+                                },
+                                "required": ["file_path_a", "file_path_b"]
+                            }
                         }
                     ]
                 }
@@ -812,12 +1258,18 @@ try:
                     res = execute_list_activities_and_phases(**args)
                 elif tool_name in ["preview_excel_data", "preview_data"]:
                     res = execute_preview_excel_data(**args)
+                elif tool_name in ["compare_two_excels_venn", "compare_two_excels", "compare_excels"]:
+                    f_a = args.get("file_path_a") or args.get("file_1") or ""
+                    f_b = args.get("file_path_b") or args.get("file_2") or ""
+                    c_name = args.get("column_name")
+                    res = execute_compare_two_excels(file_1=f_a, file_2=f_b, column_name=c_name)
                 else:
                     return {
                         "jsonrpc": "2.0",
                         "id": req_id,
                         "error": {"code": -32601, "message": f"Bilinmeyen MCP aracı: '{tool_name}'"}
                     }
+
 
                 return {
                     "jsonrpc": "2.0",
