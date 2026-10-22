@@ -438,11 +438,14 @@
           <label for="cfgTweaksInput">ChatInput Bileşen Adı (Opsiyonel):</label>
           <input type="text" id="cfgTweaksInput" class="form-input" placeholder="Standart akış için boş bırakın" value="">
           <small class="form-help">Görselinizdeki standart Chat Input için boş bırakılması önerilir. Yalnızca özel bir dosya bileşeni ID'niz varsa girin.</small>
-        </div>
+        <div id="testConnResult" style="display: none; padding: 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; margin-top: 10px;"></div>
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" id="btnResetSettings">Varsayılana Sıfırla</button>
-        <button class="btn btn-primary" id="btnSaveSettings">Kaydet & Kapat</button>
+      <div class="modal-footer" style="display: flex; justify-content: space-between;">
+        <button class="btn btn-secondary btn-sm" id="btnTestConn">⚡ Bağlantıyı Test Et</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary btn-sm" id="btnResetSettings">Varsayılana Sıfırla</button>
+          <button class="btn btn-primary btn-sm" id="btnSaveSettings">Kaydet & Kapat</button>
+        </div>
       </div>
     </div>
   </div>

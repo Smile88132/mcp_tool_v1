@@ -835,7 +835,7 @@ def call_aselsan_llm_suite_flow(
             }
         }
 
-    run_url = f"{base_url}/api/v1/run/{flow_id}"
+    run_url = f"{base_url}/api/v1/run/{flow_id}?stream=false"
     req_headers = {"Content-Type": "application/json", **headers}
 
     if not headers:
@@ -947,14 +947,19 @@ try:
         base_url: Optional[str] = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
         flow_id: Optional[str] = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
         api_key: Optional[str] = ""
-        tweaks_input: Optional[str] = "ChatInput-jugL4"
+        tweaks_input: Optional[str] = ""
         context: Optional[Dict[str, Any]] = None
 
     class SampleCompareRequest(BaseModel):
         base_url: Optional[str] = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
         flow_id: Optional[str] = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
         api_key: Optional[str] = ""
-        tweaks_input: Optional[str] = "ChatInput-jugL4"
+        tweaks_input: Optional[str] = ""
+
+    class TestConnectionRequest(BaseModel):
+        base_url: Optional[str] = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
+        flow_id: Optional[str] = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
+        api_key: Optional[str] = ""
 
     @web_app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
@@ -1002,6 +1007,17 @@ try:
     def api_preview(file_path: Optional[str] = None, max_rows: int = 5, sheet_name: Optional[str] = None):
         return execute_preview_excel_data(file_path=file_path or "", max_rows=max_rows, sheet_name=sheet_name)
 
+    @web_app.post("/api/flow/test-connection")
+    async def api_flow_test_connection(req: TestConnectionRequest):
+        """Kullanıcının girdiği API Key ve Flow ID'yi test etmek için basit bir merhaba çağrısı yapar."""
+        return call_aselsan_llm_suite_flow(
+            base_url=req.base_url or "https://llmsuiteflow.aiplatform.aselsan.com.tr",
+            flow_id=req.flow_id or "c16ecc83-ff64-4fc7-bb52-0f594beaf70a",
+            api_key=req.api_key,
+            tweaks_input="",
+            prompt_text="Merhaba, bağlantı testi yapıyorum. Lütfen 1 cümle ile bağlandığını teyit et."
+        )
+
     @web_app.post("/api/flow/compare")
     async def api_flow_compare(
         file_1: UploadFile = File(...),
@@ -1009,7 +1025,7 @@ try:
         base_url: str = Form("https://llmsuiteflow.aiplatform.aselsan.com.tr"),
         flow_id: str = Form("c16ecc83-ff64-4fc7-bb52-0f594beaf70a"),
         api_key: Optional[str] = Form(""),
-        tweaks_input: str = Form("ChatInput-jugL4"),
+        tweaks_input: str = Form(""),
         column_name: Optional[str] = Form(None)
     ):
         """İki Excel dosyasını alır, yerel Venn matematiğini hesaplar ve ASELSAN Flow'u çağırarak analiz üretir."""

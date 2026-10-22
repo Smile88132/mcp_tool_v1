@@ -669,6 +669,64 @@
       settingsModal.style.display = 'none';
     });
 
+    const btnTestConn = document.getElementById('btnTestConn');
+    const testConnResult = document.getElementById('testConnResult');
+
+    btnTestConn.addEventListener('click', async () => {
+      const apiKeyVal = cfgApiKey.value.trim();
+      if (!apiKeyVal) {
+        testConnResult.style.display = 'block';
+        testConnResult.style.background = 'rgba(239, 68, 68, 0.15)';
+        testConnResult.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+        testConnResult.style.color = '#fca5a5';
+        testConnResult.innerHTML = '⚠️ Lütfen önce API Key bilginizi girin.';
+        return;
+      }
+
+      btnTestConn.disabled = true;
+      btnTestConn.textContent = '⏳ Test Ediliyor...';
+      testConnResult.style.display = 'block';
+      testConnResult.style.background = 'rgba(59, 130, 246, 0.15)';
+      testConnResult.style.border = '1px solid rgba(59, 130, 246, 0.4)';
+      testConnResult.style.color = '#93c5fd';
+      testConnResult.innerHTML = 'ASELSAN LLM Suite Flow çağrılıyor...';
+
+      try {
+        const resp = await fetch('/api/flow/test-connection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: cfgBaseUrl.value.trim() || appConfig.baseUrl,
+            flow_id: cfgFlowId.value.trim() || appConfig.flowId,
+            api_key: apiKeyVal
+          })
+        });
+
+        const data = await resp.json();
+        btnTestConn.disabled = false;
+        btnTestConn.textContent = '⚡ Bağlantıyı Test Et';
+
+        if (data.durum === 'basarili') {
+          testConnResult.style.background = 'rgba(16, 185, 129, 0.15)';
+          testConnResult.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          testConnResult.style.color = '#6ee7b7';
+          testConnResult.innerHTML = `<strong>✅ Bağlantı Başarılı!</strong><br><span style="font-size:12px;">Model Yanıtı: ${escapeHtml(data.cevap || 'OK')}</span>`;
+        } else {
+          testConnResult.style.background = 'rgba(239, 68, 68, 0.15)';
+          testConnResult.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          testConnResult.style.color = '#fca5a5';
+          testConnResult.innerHTML = `<strong>❌ Bağlantı Başarısız:</strong><br><span style="font-size:12px;">${escapeHtml(data.mesaj || 'Bilinmeyen hata')}</span>`;
+        }
+      } catch (err) {
+        btnTestConn.disabled = false;
+        btnTestConn.textContent = '⚡ Bağlantıyı Test Et';
+        testConnResult.style.background = 'rgba(239, 68, 68, 0.15)';
+        testConnResult.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+        testConnResult.style.color = '#fca5a5';
+        testConnResult.innerHTML = `<strong>❌ Sunucu Hatası:</strong> ${escapeHtml(err.message)}`;
+      }
+    });
+
     settingsModal.addEventListener('click', (e) => {
       if (e.target === settingsModal) {
         settingsModal.style.display = 'none';
