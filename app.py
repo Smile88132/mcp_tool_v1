@@ -853,7 +853,7 @@ def call_aselsan_llm_suite_flow(
         }
 
     try:
-        resp = requests.post(run_url, headers=req_headers, json=payload, timeout=90, verify=False)
+        resp = requests.post(run_url, headers=req_headers, json=payload, timeout=180, verify=False)
         
         # 400 hatası alındıysa ve tweaks varsa, tweaks olmadan (saf prompt ile) tekrar dene
         if resp.status_code == 400 and "tweaks" in payload:
@@ -863,7 +863,7 @@ def call_aselsan_llm_suite_flow(
                 "input_value": prompt_text,
                 "session_id": session_id
             }
-            resp = requests.post(run_url, headers=req_headers, json=clean_payload, timeout=90, verify=False)
+            resp = requests.post(run_url, headers=req_headers, json=clean_payload, timeout=180, verify=False)
 
         if resp.status_code >= 400:
             err_detail = ""
