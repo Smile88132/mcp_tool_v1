@@ -145,5 +145,85 @@ class TestTwoExcelComparison(unittest.TestCase):
         self.assertEqual(f_data["venn_verileri"]["only_b_count"], 1)
 
 
+class TestAselixBatchPipeline(unittest.TestCase):
+    """AselixAI API'si mock'lanarak batch kıyaslamanın uçtan uca doğrulanması."""
+
+    def _mock_response(self, content):
+        from unittest.mock import MagicMock
+        r = MagicMock()
+        r.status_code = 200
+        r.json.return_value = {"choices": [{"message": {"content": content}}]}
+        return r
+
+    def test_ai_index_matching(self):
+        from unittest.mock import patch
+        import app
+        a = ["Acil durdurma butonu takılıyor", "Röle soketi kırık"]
+        b = ["Optik sensör sapması", "Acil stop butonu mekanik takılma"]
+        llm = '```json\n[{"a": 1, "b": 2, "similarity": 93}, {"a": 2, "b": null, "similarity": 0}]\n```'
+        with patch.object(app.requests, "post", return_value=self._mock_response(llm)):
+            res = app.compare_items_with_aselix_batch("http://x/v1", "key", "m", a, b, threshold=0.8)
+        self.assertEqual(res["kaynak"], "aselix_ai")
+        self.assertEqual(len(res["matched_pairs"]), 1)
+        self.assertEqual(res["matched_pairs"][0]["item_a"], a[0])
+        self.assertEqual(res["matched_pairs"][0]["item_b"], b[1])
+        self.assertIn("tanilama", res)
+
+    def test_timeout_falls_back_to_local(self):
+        from unittest.mock import patch
+        import app
+        with patch.object(app.requests, "post", side_effect=app.requests.exceptions.Timeout()):
+            res = app.compare_items_with_aselix_batch(
+                "http://x/v1", "key", "m", ["Kablo gevşek"], ["Kablo gevşek", "Hata"], threshold=0.8, timeout=1)
+        self.assertEqual(res["kaynak"], "yerel_fallback")
+        self.assertTrue(res["api_hatasi"])
+        self.assertEqual(len(res["matched_pairs"]), 1)
+
+    def test_shortlist_limits_prompt_size(self):
+        from app import shortlist_candidates_for_batch
+        b = [f"Uygunsuzluk kaydı numara {i} farklı açıklama" for i in range(500)] + ["Pano etiketi eksik"]
+        sl = shortlist_candidates_for_batch(["Pano etiketleme eksik"], b, top_k=6, max_total=60)
+        self.assertLessEqual(len(sl), 60)
+        self.assertIn("Pano etiketi eksik", sl)
+
+    def test_full_batch_flow_via_endpoints(self):
+        """15'erli batch'lerle 40 satır: chunk -> finalize, AI mock'lu."""
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        import app
+        client = TestClient(app.web_app)
+        a = [f"Hata kodu {i} test sapması" for i in range(40)]
+        b = a[:20] + [f"Yeni hata {i}" for i in range(10)]
+        llm = "[]"  # AI eşleşme bulmasa da fuzzy tam eşleşmeleri yakalamalı
+        pairs = []
+        with patch.object(app.requests, "post", return_value=self._mock_response(llm)):
+            for i in range(0, 40, 15):
+                r = client.post("/api/compare/batch-chunk", json={
+                    "api_key": "k", "items_a_batch": a[i:i + 15], "candidates_b": b,
+                    "threshold": 0.95, "batch_index": i // 15 + 1, "total_batches": 3})
+                self.assertEqual(r.status_code, 200)
+                pairs += r.json()["matched_pairs"]
+        f = client.post("/api/compare/batch-finalize", json={
+            "threshold": 0.95, "all_items_a": a, "all_items_b": b,
+            "matched_pairs": pairs, "need_executive_summary": False}).json()
+        v = f["venn_verileri"]
+        self.assertEqual(v["intersection_count"], 20)
+        self.assertEqual(v["only_a_count"], 20)
+        self.assertEqual(v["only_b_count"], 10)
+
+    def test_extract_items_endpoint(self):
+        from fastapi.testclient import TestClient
+        from app import web_app
+        client = TestClient(web_app)
+        path = os.path.abspath("ornek_uygunsuzluklar.xlsx")
+        with open(path, "rb") as f1, open(path, "rb") as f2:
+            r = client.post("/api/compare/extract-items",
+                            files={"file_1": ("a.xlsx", f1.read()), "file_2": ("b.xlsx", f2.read())},
+                            data={"col_1": "auto", "col_2": "auto"})
+        d = r.json()
+        self.assertEqual(d["durum"], "basarili")
+        self.assertGreater(len(d["items_1"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

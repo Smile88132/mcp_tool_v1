@@ -96,6 +96,8 @@
   const progressBarFill = document.getElementById('progressBarFill');
   const progressPctBadge = document.getElementById('progressPctBadge');
   const actionHintText = document.getElementById('actionHintText');
+  const batchLogPanel = document.getElementById('batchLogPanel');
+  const btnCloseProgress = document.getElementById('btnCloseProgress');
 
   // Results Section
   const resultsSection = document.getElementById('resultsSection');
@@ -202,6 +204,7 @@
     // Run Comparison
     btnRunComparison.addEventListener('click', runUnifiedComparison);
     btnUseSampleFiles.addEventListener('click', loadSampleDemoData);
+    if (btnCloseProgress) btnCloseProgress.addEventListener('click', () => { progressBanner.style.display = 'none'; });
 
     // Filter Buttons
     tabFilterAll.addEventListener('click', () => setTableFilter('all'));
@@ -620,6 +623,219 @@
   }
 
   // --------------------------------------------------------------------------
+  // AselixAI Batch Pipeline (her istek < 1 dk, canlı log ile)
+  // --------------------------------------------------------------------------
+  const REQUEST_HARD_LIMIT_MS = 58000; // Tarayıcı tarafı güvenlik: 58 sn'de isteği iptal et
+
+  function setProgress(pct) {
+    const p = Math.max(0, Math.min(100, Math.round(pct)));
+    if (progressBarFill) progressBarFill.style.width = `${p}%`;
+    if (progressPctBadge) progressPctBadge.textContent = `%${p}`;
+  }
+
+  function batchLog(msg, level = 'info') {
+    if (!batchLogPanel) return;
+    batchLogPanel.style.display = 'block';
+    const line = document.createElement('div');
+    line.className = `batch-log-line log-${level}`;
+    const ts = new Date().toLocaleTimeString('tr-TR');
+    line.innerHTML = `<span class="log-ts">${ts}</span> ${escapeHtml(msg)}`;
+    batchLogPanel.appendChild(line);
+    batchLogPanel.scrollTop = batchLogPanel.scrollHeight;
+  }
+
+  function resetBatchLog() {
+    if (!batchLogPanel) return;
+    batchLogPanel.innerHTML = '';
+    batchLogPanel.style.display = 'none';
+    if (btnCloseProgress) btnCloseProgress.style.display = 'none';
+    progressBanner.classList.remove('progress-error');
+  }
+
+  function failPipeline(msg) {
+    batchLog(msg, 'error');
+    progressStatusText.textContent = '❌ İşlem durdu: ' + msg;
+    progressBanner.classList.add('progress-error');
+    if (btnCloseProgress) btnCloseProgress.style.display = 'inline-flex';
+    btnRunComparison.disabled = false;
+  }
+
+  // Zaman sınırlı fetch + canlı geçen süre sayacı
+  async function fetchWithLimit(url, options, liveLabel) {
+    const controller = new AbortController();
+    const t0 = Date.now();
+    const timer = setTimeout(() => controller.abort(), REQUEST_HARD_LIMIT_MS);
+    const ticker = setInterval(() => {
+      const sec = Math.round((Date.now() - t0) / 1000);
+      progressSubText.textContent = `${liveLabel} • Geçen süre: ${sec} sn / limit 50 sn`;
+    }, 1000);
+    try {
+      const resp = await fetch(url, { ...options, signal: controller.signal });
+      const text = await resp.text();
+      let data;
+      try { data = JSON.parse(text); } catch (_) {
+        throw new Error(`Sunucu JSON dışı yanıt döndü (HTTP ${resp.status}): ${text.slice(0, 200)}`);
+      }
+      if (!resp.ok) {
+        const detail = data && (data.mesaj || data.detail);
+        throw new Error(`HTTP ${resp.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 300)}`);
+      }
+      return { data, elapsed: (Date.now() - t0) / 1000 };
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw new Error(`İstek ${REQUEST_HARD_LIMIT_MS / 1000} sn içinde tamamlanmadı ve iptal edildi.`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      clearInterval(ticker);
+    }
+  }
+
+  async function runAselixBatchPipeline(inputMode, thresholdDec, batchSize) {
+    resetBatchLog();
+    setProgress(2);
+    const model = appConfig.model || 'aselix-llm-v1';
+
+    // 1) Verileri hazırla
+    let itemsA = [], itemsB = [], doc1 = '1. Metin Seti', doc2 = '2. Metin Seti', col1 = 'Metin', col2 = 'Metin';
+    try {
+      if (inputMode === 'excel') {
+        progressStatusText.textContent = 'Excel sütunları okunuyor...';
+        batchLog(`Excel okunuyor: ${file1.name} [${colSelect1.value || 'auto'}] ve ${file2.name} [${colSelect2.value || 'auto'}]`);
+        const fd = new FormData();
+        fd.append('file_1', file1);
+        fd.append('file_2', file2);
+        fd.append('col_1', colSelect1.value || 'auto');
+        fd.append('col_2', colSelect2.value || 'auto');
+        const { data } = await fetchWithLimit('/api/compare/extract-items', { method: 'POST', body: fd }, 'Excel okunuyor');
+        if (data.durum !== 'basarili') throw new Error(data.mesaj || 'Excel okunamadı');
+        itemsA = data.items_1; itemsB = data.items_2;
+        doc1 = data.dosya_1_adi; doc2 = data.dosya_2_adi; col1 = data.sutun_1; col2 = data.sutun_2;
+      } else {
+        itemsA = textPaste1.value.split('\n').map(l => l.trim()).filter(Boolean);
+        itemsB = textPaste2.value.split('\n').map(l => l.trim()).filter(Boolean);
+      }
+    } catch (err) {
+      failPipeline('Veri hazırlama hatası: ' + err.message);
+      return;
+    }
+
+    // Tekrarlayan satırları tekilleştir (gereksiz API yükünü önler)
+    itemsA = [...new Set(itemsA)];
+    itemsB = [...new Set(itemsB)];
+    if (!itemsA.length || !itemsB.length) {
+      failPipeline('Kıyaslanacak geçerli satır bulunamadı.');
+      return;
+    }
+
+    const chunks = [];
+    for (let i = 0; i < itemsA.length; i += batchSize) chunks.push(itemsA.slice(i, i + batchSize));
+    const total = chunks.length;
+    batchLog(`Hazır: A=${itemsA.length} tekil satır, B=${itemsB.length} tekil satır → ${total} batch × ${batchSize} satır (model: ${model})`);
+
+    // 2) Batch döngüsü
+    const allPairs = [];
+    const usedB = new Set();
+    let aiOk = 0, fallbackCount = 0, failCount = 0;
+
+    for (let i = 0; i < total; i++) {
+      const chunk = chunks[i];
+      const label = `Batch ${i + 1}/${total}`;
+      setProgress(5 + (i / total) * 80);
+      progressStatusText.textContent = `${label} AselixAI'ye gönderildi (${chunk.length} satır)...`;
+
+      try {
+        const { data, elapsed } = await fetchWithLimit('/api/compare/batch-chunk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: appConfig.baseUrl,
+            api_key: appConfig.apiKey,
+            model,
+            items_a_batch: chunk,
+            candidates_b: itemsB.filter(b => !usedB.has(b)),
+            threshold: thresholdDec,
+            timeout_sec: 50,
+            batch_index: i + 1,
+            total_batches: total
+          })
+        }, label);
+
+        const pairs = Array.isArray(data.matched_pairs) ? data.matched_pairs : [];
+        allPairs.push(...pairs);
+        pairs.forEach(p => usedB.add(p.item_b));
+        const d = data.tanilama || {};
+        const extra = d.shortlist_sayisi ? `, ${d.shortlist_sayisi} B adayı` : '';
+
+        if (data.kaynak === 'aselix_ai') {
+          aiOk++;
+          batchLog(`✓ ${label}: ${elapsed.toFixed(1)} sn, ${pairs.length} eşleşme (AI: ${d.llm_eslesme ?? '-'}, fuzzy: ${d.fuzzy_ek_eslesme ?? 0}${extra})`, 'ok');
+        } else {
+          fallbackCount++;
+          batchLog(`⚠ ${label}: ${elapsed.toFixed(1)} sn, yerel ML ile tamamlandı (${pairs.length} eşleşme). Sebep: ${data.api_hatasi || data.kaynak}`, 'warn');
+          if (d.llm_yanit_onizleme) batchLog(`   LLM yanıt önizleme: ${d.llm_yanit_onizleme}`, 'warn');
+        }
+      } catch (err) {
+        failCount++;
+        batchLog(`✗ ${label} başarısız: ${err.message}`, 'error');
+        // İlk 2 batch'in ikisi de tamamen başarısızsa (ağ/sunucu sorunu) devam etmek anlamsız
+        if (i === 1 && failCount === 2) {
+          failPipeline('İlk iki batch başarısız oldu. Sunucu/ağ bağlantısını ve API ayarlarını kontrol edin.');
+          return;
+        }
+      }
+    }
+
+    batchLog(`Batch'ler tamamlandı: ${aiOk} AI, ${fallbackCount} yerel yedek, ${failCount} hatalı. Toplam ${allPairs.length} eşleşme.`, failCount ? 'warn' : 'ok');
+
+    // 3) Birleştir + yönetici özeti (ayrı istek, < 1 dk)
+    setProgress(88);
+    progressStatusText.textContent = 'Sonuçlar birleştiriliyor ve yönetici özeti üretiliyor...';
+    let finalData;
+    try {
+      const res = await fetchWithLimit('/api/compare/batch-finalize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_url: appConfig.baseUrl,
+          api_key: appConfig.apiKey,
+          model,
+          threshold: thresholdDec,
+          all_items_a: itemsA,
+          all_items_b: itemsB,
+          matched_pairs: allPairs,
+          doc1_name: doc1,
+          doc2_name: doc2,
+          col1_name: col1,
+          col2_name: col2,
+          need_executive_summary: true
+        })
+      }, 'Yönetici özeti');
+      finalData = res.data;
+      batchLog(`✓ Birleştirme + özet: ${res.elapsed.toFixed(1)} sn (özet durumu: ${finalData.ai_durum})`, finalData.ai_durum === 'basarili' ? 'ok' : 'warn');
+    } catch (err) {
+      failPipeline('Birleştirme/özet hatası: ' + err.message);
+      return;
+    }
+
+    if (finalData.durum !== 'basarili') {
+      failPipeline(finalData.mesaj || 'Birleştirme başarısız.');
+      return;
+    }
+
+    setProgress(100);
+    progressStatusText.textContent = '✓ Kıyaslama tamamlandı';
+    btnRunComparison.disabled = false;
+    // Uyarı/hata olduysa log görünür kalsın, kullanıcı kapatsın
+    if (fallbackCount || failCount) {
+      if (btnCloseProgress) btnCloseProgress.style.display = 'inline-flex';
+    } else {
+      setTimeout(() => { progressBanner.style.display = 'none'; }, 1200);
+    }
+    renderAnalysisResults(finalData);
+  }
+  // --------------------------------------------------------------------------
   // Run Unified Comparison (/api/compare/run)
   // --------------------------------------------------------------------------
   async function runUnifiedComparison() {
@@ -640,6 +856,7 @@
     }
 
     progressBanner.style.display = 'flex';
+    resetBatchLog();
     if (progressBarWrapper) progressBarWrapper.style.display = 'block';
     if (progressBarFill) progressBarFill.style.width = '5%';
     if (progressPctBadge) progressPctBadge.textContent = '%5';
@@ -649,94 +866,17 @@
     const isAselix = appConfig.engine === 'aselix';
     const batchSize = parseInt(appConfig.batchSize, 10) || 15;
 
-    // Metin Modunda ve Aselix seçildiğinde: İstemci tarafında gerçek zamanlı chunking döngüsü
-    if (inputMode === 'paste' && isAselix && appConfig.apiKey && appConfig.apiKey.trim()) {
-      try {
-        const lines1 = textPaste1.value.split('\n').filter(l => l.trim().length > 0);
-        const lines2 = textPaste2.value.split('\n').filter(l => l.trim().length > 0);
-
-        const chunks = [];
-        for (let i = 0; i < lines1.length; i += batchSize) {
-          chunks.push(lines1.slice(i, i + batchSize));
-        }
-        const totalBatches = chunks.length;
-        let allMatchedPairs = [];
-
-        for (let i = 0; i < totalBatches; i++) {
-          const chunk = chunks[i];
-          const startPct = Math.round((i / (totalBatches + 1)) * 100);
-          if (progressBarFill) progressBarFill.style.width = `${Math.max(5, startPct)}%`;
-          if (progressPctBadge) progressPctBadge.textContent = `%${Math.max(5, startPct)}`;
-
-          progressStatusText.textContent = `Batch ${i + 1}/${totalBatches} AselixAI ile işleniyor (${chunk.length} satır)...`;
-          progressSubText.textContent = `1 dakikalık zaman aşımı koruması devrede (Timeout: 50 sn) • Model: ${appConfig.model || 'aselix-llm-v1'}`;
-
-          const chunkResp = await fetch('/api/compare/batch-chunk', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              base_url: appConfig.baseUrl,
-              api_key: appConfig.apiKey,
-              model: appConfig.model || 'aselix-llm-v1',
-              items_a_batch: chunk,
-              candidates_b: lines2,
-              threshold: thresholdDec,
-              timeout_sec: 50,
-              batch_index: i + 1,
-              total_batches: totalBatches
-            })
-          });
-
-          const chunkData = await chunkResp.json();
-          if (chunkData.matched_pairs && Array.isArray(chunkData.matched_pairs)) {
-            allMatchedPairs.push(...chunkData.matched_pairs);
-          }
-        }
-
-        // Finalize: Kümeleri birleştir & Yönetici Özeti üret
-        progressStatusText.textContent = 'Tüm batch sonuçları birleştiriliyor ve AselixAI Yönetici Özeti üretiliyor...';
-        progressSubText.textContent = `Toplam ${allMatchedPairs.length} eşleşme bulundu. Kök neden ve risk analizi derleniyor...`;
-        if (progressBarFill) progressBarFill.style.width = '90%';
-        if (progressPctBadge) progressPctBadge.textContent = '%90';
-
-        const finalResp = await fetch('/api/compare/batch-finalize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            base_url: appConfig.baseUrl,
-            api_key: appConfig.apiKey,
-            model: appConfig.model || 'aselix-llm-v1',
-            threshold: thresholdDec,
-            all_items_a: lines1,
-            all_items_b: lines2,
-            matched_pairs: allMatchedPairs,
-            doc1_name: '1. Metin Seti',
-            doc2_name: '2. Metin Seti',
-            col1_name: 'Metin',
-            col2_name: 'Metin',
-            need_executive_summary: true
-          })
-        });
-
-        const finalData = await finalResp.json();
-        if (progressBarFill) progressBarFill.style.width = '100%';
-        if (progressPctBadge) progressPctBadge.textContent = '%100';
-
-        btnRunComparison.disabled = false;
-        setTimeout(() => { progressBanner.style.display = 'none'; }, 400);
-
-        if (finalData.durum === 'basarili') {
-          renderAnalysisResults(finalData);
-        } else {
-          alert('Kıyaslama Hatası: ' + (finalData.mesaj || 'İşlem tamamlanamadı.'));
-        }
-        return;
-      } catch (err) {
-        btnRunComparison.disabled = false;
+    // AselixAI modu: Excel VE metin için istemci tarafında gerçek batch döngüsü.
+    // Her istek ayrı bir HTTP çağrısıdır -> hiçbir istek 1 dakikayı aşmaz.
+    if (isAselix) {
+      if (!appConfig.apiKey || !appConfig.apiKey.trim()) {
         progressBanner.style.display = 'none';
-        alert('Batch iletişim hatası: ' + err.message);
+        btnRunComparison.disabled = false;
+        alert('AselixAI modu için Ayarlar\'dan API anahtarı girmelisiniz (veya Yerel ML moduna geçin).');
         return;
       }
+      await runAselixBatchPipeline(inputMode, thresholdDec, batchSize);
+      return;
     }
 
     // Excel veya Yerel ML Modu

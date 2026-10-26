@@ -54,6 +54,17 @@ if sys.platform == "win32":
 # Metin Temizleme ve Sütun Eşleme Yardımcıları
 # ==============================================================================
 
+def _safe_log(msg: str) -> None:
+    """Konsola log yazar; Windows kod sayfası (cp1254/cp857) hatalarında isteği asla çökertmez."""
+    try:
+        print(msg, flush=True)
+    except Exception:
+        try:
+            print(msg.encode("ascii", "replace").decode("ascii"), flush=True)
+        except Exception:
+            pass
+
+
 def normalize_str(text: Any) -> str:
     """Türkçe karakter ve boşluk toleranslı küçük harf normalizasyonu."""
     if text is None or pd.isna(text):
@@ -1170,6 +1181,33 @@ def extract_json_array_from_llm(text: str) -> List[Dict[str, Any]]:
     return []
 
 
+def shortlist_candidates_for_batch(
+    items_a_batch: List[str],
+    candidates_b: List[str],
+    top_k: int = 6,
+    max_total: int = 60
+) -> List[str]:
+    """
+    Her batch'e TÜM B listesini göndermek yerine (büyük listelerde prompt devasa olur ve
+    50 sn içinde yanıt gelmez), her A maddesi için yerel benzerlikle en yakın top_k B adayını seçer.
+    Birleşik aday listesi max_total ile sınırlandırılır -> prompt küçük, yanıt hızlı kalır.
+    """
+    unique_b = list(dict.fromkeys([clean_text_content(b) for b in candidates_b if clean_text_content(b)]))
+    if len(unique_b) <= max_total:
+        return unique_b
+
+    scored_union: Dict[str, float] = {}
+    for a in items_a_batch:
+        scores = [(calculate_text_similarity(a, b), b) for b in unique_b]
+        scores.sort(key=lambda x: x[0], reverse=True)
+        for score, b in scores[:top_k]:
+            if b not in scored_union or scored_union[b] < score:
+                scored_union[b] = score
+
+    ranked = sorted(scored_union.items(), key=lambda x: x[1], reverse=True)
+    return [b for b, _ in ranked[:max_total]]
+
+
 def compare_items_with_aselix_batch(
     base_url: str,
     api_key: str,
@@ -1181,54 +1219,64 @@ def compare_items_with_aselix_batch(
 ) -> Dict[str, Any]:
     """
     1 dakikalık (timeout=50sn) zaman aşımı limitini kesinlikle aşmayacak şekilde
-    küçük bir batch (10-15 kayıt) için AselixAI API'si üzerinden anlamsal kıyaslama yapar.
+    küçük bir batch (10-20 kayıt) için AselixAI API'si üzerinden anlamsal kıyaslama yapar.
+
+    - B listesi her A maddesi için en yakın adaylara daraltılır (shortlist).
+    - LLM'den metin yerine NUMARA (indeks) döndürmesi istenir -> eşleşmeler orijinal metne birebir bağlanır.
+    - Her yanıtta tanılama (diagnostics) bilgisi döner: süre, kaynak, hata, aday sayısı vb.
     """
-    if not items_a_batch or not candidates_b:
+    t0 = time.time()
+    clean_batch = [clean_text_content(x) for x in items_a_batch if clean_text_content(x)]
+    clean_batch = list(dict.fromkeys(clean_batch))
+
+    def _diag(extra: Dict[str, Any]) -> Dict[str, Any]:
+        base = {
+            "a_sayisi": len(clean_batch),
+            "b_aday_sayisi": len(candidates_b),
+            "sure_sn": round(time.time() - t0, 2),
+        }
+        base.update(extra)
+        return base
+
+    if not clean_batch or not candidates_b:
         return {
             "durum": "basarili",
             "matched_pairs": [],
-            "unmatched_a": items_a_batch,
-            "kaynak": "bos_liste"
+            "unmatched_a": clean_batch,
+            "kaynak": "bos_liste",
+            "tanilama": _diag({})
         }
 
-    # Eğer API Key yoksa yerel fuzzy matching kullan
+    # API Key yoksa yerel fuzzy matching kullan
     if not api_key or not api_key.strip():
-        local_res = compute_fuzzy_venn(items_a_batch, candidates_b, threshold=threshold)
+        local_res = compute_fuzzy_venn(clean_batch, candidates_b, threshold=threshold)
         return {
             "durum": "basarili",
             "matched_pairs": local_res["matched_pairs"],
             "unmatched_a": local_res["only_a_items"],
-            "kaynak": "yerel_ml"
+            "kaynak": "yerel_ml",
+            "tanilama": _diag({"not": "API anahtarı yok, yerel ML kullanıldı."})
         }
 
-    # Liste formatını hazırla
-    list_a_text = "\n".join([f"{i+1}. {clean_text_content(item)}" for i, item in enumerate(items_a_batch)])
-    list_b_text = "\n".join([f"{j+1}. {clean_text_content(cand)}" for j, cand in enumerate(candidates_b)])
+    shortlist = shortlist_candidates_for_batch(clean_batch, candidates_b)
+
+    list_a_text = "\n".join([f"A{i+1}. {item}" for i, item in enumerate(clean_batch)])
+    list_b_text = "\n".join([f"B{j+1}. {cand}" for j, cand in enumerate(shortlist)])
 
     system_prompt = (
-        "Sen ASELSAN Sistem ve Kalite Güvence mühendisliği uzmanı bir yapay zeka analiz asistanısın. "
-        "Görevin, iki test fazından alınan uygunsuzluk maddelerini karşılaştırmak ve anlamsal olarak aynı "
-        "veya eşdeğer arıza/sapmayı ifade edenleri eşleştirmektir. "
-        "Farklı kelimeler veya eş anlamlı terimler kullanılmış olsa bile aynı teknik problemi ifade ediyorsa eşleştir. "
-        "Yanıtını YALNIZCA geçerli bir JSON dizisi olarak üret, başka hiçbir açıklama metni ekleme."
+        "Sen ASELSAN Sistem ve Kalite Güvence mühendisliği uzmanı bir analiz asistanısın. "
+        "İki listedeki uygunsuzluk maddelerini karşılaştırıp anlamsal olarak AYNI teknik problemi ifade edenleri eşleştirirsin. "
+        "Farklı kelimeler/eş anlamlılar kullanılsa da aynı arızaysa eşleştir. "
+        "Yanıtını YALNIZCA geçerli bir JSON dizisi olarak üret, açıklama metni ekleme."
     )
-
     user_prompt = (
-        f"Aşağıdaki Liste A'da yer alan {len(items_a_batch)} adet uygunsuzluğu incele. "
-        "Her bir Liste A maddesi için Liste B'deki adaylar arasında anlamsal olarak aynı teknik arızayı "
-        "ifade eden bir karşılık var mı değerlendir.\n\n"
-        "ÇIKTI FORMATI (Yalnızca aşağıdaki JSON şemasına uygun JSON dizisi döndür):\n"
-        "[\n"
-        "  {\n"
-        '    "item_a": "1. listedeki tam metin",\n'
-        '    "item_b": "2. listedeki eşleşen tam metin (eşleşme yoksa null)",\n'
-        '    "is_match": true veya false,\n'
-        '    "similarity": 50 ile 100 arasında benzerlik yüzdesi (eşleşme yoksa 0),\n'
-        '    "reason": "Kısa eşleşme gerekçesi"\n'
-        "  }\n"
-        "]\n\n"
-        f"--- LİSTE A ({len(items_a_batch)} Kayıt) ---\n{list_a_text}\n\n"
-        f"--- LİSTE B ({len(candidates_b)} Aday Kayıt) ---\n{list_b_text}\n"
+        f"Liste A'daki {len(clean_batch)} maddenin her biri için Liste B'de aynı teknik problemi ifade eden madde var mı?\n"
+        "Her B maddesi en fazla bir A maddesiyle eşleşebilir.\n\n"
+        "ÇIKTI FORMATI (yalnızca bu JSON dizisi, her A maddesi için bir eleman):\n"
+        '[{"a": 1, "b": 3, "similarity": 92}, {"a": 2, "b": null, "similarity": 0}]\n'
+        "a = A numarası, b = eşleşen B numarası (yoksa null), similarity = 0-100 arası anlamsal benzerlik.\n\n"
+        f"--- LİSTE A ---\n{list_a_text}\n\n"
+        f"--- LİSTE B ---\n{list_b_text}\n"
     )
 
     chat_res = call_aselix_chat(
@@ -1242,70 +1290,93 @@ def compare_items_with_aselix_batch(
         temperature=0.1,
         timeout=timeout  # 1 dakikayı kesinlikle aşmayacak (50sn)
     )
+    api_sure = round(time.time() - t0, 2)
 
     if chat_res.get("durum") != "basarili":
-        # API zaman aşımı veya bağlantı hatası durumunda yerel fuzzy distance ile kurtar
-        local_res = compute_fuzzy_venn(items_a_batch, candidates_b, threshold=threshold)
+        # API zaman aşımı veya bağlantı hatası -> bu batch için yerel fuzzy distance ile kurtar
+        local_res = compute_fuzzy_venn(clean_batch, candidates_b, threshold=threshold)
         return {
             "durum": "uyari",
             "api_hatasi": chat_res.get("mesaj"),
             "matched_pairs": local_res["matched_pairs"],
             "unmatched_a": local_res["only_a_items"],
-            "kaynak": "yerel_fallback"
+            "kaynak": "yerel_fallback",
+            "tanilama": _diag({
+                "shortlist_sayisi": len(shortlist),
+                "prompt_karakter": len(user_prompt),
+                "api_sure_sn": api_sure,
+                "api_durum": chat_res.get("durum"),
+                "hata_kodu": chat_res.get("hata_kodu")
+            })
         }
 
-    raw_output = chat_res.get("cevap", "")
-    parsed_matches = extract_json_array_from_llm(raw_output)
+    raw_output = chat_res.get("cevap", "") or ""
+    parsed = extract_json_array_from_llm(raw_output)
+    # Geçerli ama boş JSON dizisi ("[]") = AI hiç eşleşme bulmadı; bu bir hata değildir
+    compact = raw_output.replace(" ", "").replace("\n", "").replace("\r", "")
+    parsed_ok = bool(parsed) or "[]" in compact
 
-    matched_pairs = []
-    matched_a = set()
-    matched_b = set()
+    matched_pairs: List[Dict[str, Any]] = []
+    matched_a_idx: Set[int] = set()
+    matched_b_idx: Set[int] = set()
     threshold_pct = threshold * 100
 
-    for m in parsed_matches:
+    def _to_index(val: Any, limit: int) -> Optional[int]:
+        if val is None:
+            return None
+        s = str(val).strip().upper().lstrip("AB").rstrip(".")
+        if not s.isdigit():
+            return None
+        idx = int(s) - 1
+        return idx if 0 <= idx < limit else None
+
+    for m in parsed:
         if not isinstance(m, dict):
             continue
-        item_a = str(m.get("item_a") or "").strip()
-        item_b = str(m.get("item_b") or "").strip()
-        is_match = bool(m.get("is_match"))
-        sim = float(m.get("similarity") or 0.0)
+        ia = _to_index(m.get("a"), len(clean_batch))
+        ib = _to_index(m.get("b"), len(shortlist))
+        try:
+            sim = float(m.get("similarity") or 0.0)
+        except (TypeError, ValueError):
+            sim = 0.0
+        if ia is None or ib is None or sim < threshold_pct:
+            continue
+        if ia in matched_a_idx or ib in matched_b_idx:
+            continue
+        matched_a_idx.add(ia)
+        matched_b_idx.add(ib)
+        matched_pairs.append({
+            "item_a": clean_batch[ia],
+            "item_b": shortlist[ib],
+            "similarity": round(sim, 1),
+            "match_type": f"AI Semantik (%{round(sim, 1)})"
+        })
 
-        if is_match and item_b and item_b.lower() not in ["null", "none", "yok"] and sim >= threshold_pct:
-            # item_b'yi candidates_b içindeki tam metin ile eşle
-            matched_cand = None
-            for cand in candidates_b:
-                if normalize_str(cand) == normalize_str(item_b) or cand in item_b or item_b in cand:
-                    matched_cand = cand
-                    break
-            if not matched_cand:
-                matched_cand = item_b
-
-            matched_pairs.append({
-                "item_a": item_a,
-                "item_b": matched_cand,
-                "similarity": round(sim, 1),
-                "match_type": f"AI Semantik (%{round(sim, 1)})",
-                "ai_reason": str(m.get("reason") or "AselixAI anlamsal eşleşmesi")
-            })
-            matched_a.add(item_a)
-            matched_b.add(matched_cand)
-
-    # LLM'in eşleştiremediği veya JSON'da eksik kalanlar için fuzzy mesafe kontrolü
-    unmatched_a = [a for a in items_a_batch if a not in matched_a]
-    remaining_b = [b for b in candidates_b if b not in matched_b]
-
+    # LLM'in eşleştiremediği / JSON'da eksik kalanlar için yerel fuzzy kontrolü
+    unmatched_a = [a for i, a in enumerate(clean_batch) if i not in matched_a_idx]
+    remaining_b = [b for j, b in enumerate(shortlist) if j not in matched_b_idx]
+    fuzzy_added = 0
     if unmatched_a and remaining_b:
         local_fallback = compute_fuzzy_venn(unmatched_a, remaining_b, threshold=threshold)
         for pair in local_fallback["matched_pairs"]:
             matched_pairs.append(pair)
-            matched_a.add(pair["item_a"])
+            fuzzy_added += 1
         unmatched_a = local_fallback["only_a_items"]
 
     return {
-        "durum": "basarili",
+        "durum": "basarili" if parsed_ok else "uyari",
+        "api_hatasi": None if parsed_ok else "AselixAI yanıtı JSON olarak ayrıştırılamadı; bu batch yerel ML ile tamamlandı.",
         "matched_pairs": matched_pairs,
         "unmatched_a": unmatched_a,
-        "kaynak": "aselix_ai"
+        "kaynak": "aselix_ai" if parsed_ok else "aselix_parse_hatasi",
+        "tanilama": _diag({
+            "shortlist_sayisi": len(shortlist),
+            "prompt_karakter": len(user_prompt),
+            "api_sure_sn": api_sure,
+            "llm_eslesme": len(matched_pairs) - fuzzy_added,
+            "fuzzy_ek_eslesme": fuzzy_added,
+            "llm_yanit_onizleme": raw_output[:300]
+        })
     }
 
 
@@ -1875,13 +1946,59 @@ try:
             "model_kullanilan": model
         }
 
-    @web_app.post("/api/compare/batch-chunk")
-    async def api_compare_batch_chunk(req: BatchChunkRequest):
+    @web_app.post("/api/compare/extract-items")
+    async def api_compare_extract_items(
+        file_1: UploadFile = File(...),
+        file_2: UploadFile = File(...),
+        col_1: Optional[str] = Form("auto"),
+        col_2: Optional[str] = Form("auto")
+    ):
         """
-        1 dakikalık zaman aşımını aşmayacak şekilde tek bir batch (10-15 satır) için
+        İki Excel dosyasından seçilen sütunların satırlarını liste olarak döndürür.
+        Tarayıcı bu listeleri batch'lere bölüp her birini ayrı (<1 dk) istekle gönderir.
+        """
+        try:
+            f1_bytes = await file_1.read()
+            f2_bytes = await file_2.read()
+            df1 = read_excel_safe(f1_bytes)
+            df2 = read_excel_safe(f2_bytes)
+
+            def _pick(df: pd.DataFrame, col: Optional[str]) -> str:
+                if col and col != "auto" and col in df.columns:
+                    return col
+                try:
+                    _, _, c = resolve_columns(df)
+                    return c
+                except Exception:
+                    return df.columns[0]
+
+            c1 = _pick(df1, col_1)
+            c2 = _pick(df2, col_2)
+            items_1 = [clean_text_content(x) for x in df1[c1].dropna().astype(str).tolist()]
+            items_2 = [clean_text_content(x) for x in df2[c2].dropna().astype(str).tolist()]
+            items_1 = [x for x in items_1 if x]
+            items_2 = [x for x in items_2 if x]
+            return {
+                "durum": "basarili",
+                "dosya_1_adi": file_1.filename or "1. Belge",
+                "dosya_2_adi": file_2.filename or "2. Belge",
+                "sutun_1": str(c1),
+                "sutun_2": str(c2),
+                "items_1": items_1,
+                "items_2": items_2
+            }
+        except Exception as e:
+            return {"durum": "hata", "mesaj": f"Excel dosyaları okunamadı: {str(e)}"}
+
+    @web_app.post("/api/compare/batch-chunk")
+    def api_compare_batch_chunk(req: BatchChunkRequest):
+        """
+        1 dakikalık zaman aşımını aşmayacak şekilde tek bir batch (10-20 satır) için
         AselixAI anlamsal kıyaslama isteği yürütür.
+        Senkron 'def' -> FastAPI threadpool'da çalışır, bloklayan HTTP çağrısı sunucuyu dondurmaz.
         """
         t_start = time.time()
+        _safe_log(f"[BATCH {req.batch_index}/{req.total_batches}] Başladı: {len(req.items_a_batch)} A satırı, {len(req.candidates_b)} B adayı")
         res = compare_items_with_aselix_batch(
             base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
             api_key=req.api_key,
@@ -1895,10 +2012,15 @@ try:
         res["batch_index"] = req.batch_index
         res["total_batches"] = req.total_batches
         res["gecen_sure_sn"] = elapsed
+        _safe_log(
+            f"[BATCH {req.batch_index}/{req.total_batches}] Bitti: {elapsed}sn, kaynak={res.get('kaynak')}, "
+            f"eşleşme={len(res.get('matched_pairs', []))}"
+            + (f", HATA={res.get('api_hatasi')}" if res.get('api_hatasi') else "")
+        )
         return res
 
     @web_app.post("/api/compare/batch-finalize")
-    async def api_compare_batch_finalize(req: BatchFinalizeRequest):
+    def api_compare_batch_finalize(req: BatchFinalizeRequest):
         """
         Tüm batch'lerden toplanan eşleşmeleri birleştirir, Venn şeması küme istatistiklerini
         hesaplar ve AselixAI ile hızlı bir yönetici özeti (< 1 dakika) üretir.
@@ -1914,8 +2036,8 @@ try:
         dedup_matched = []
 
         for p in matched_pairs:
-            ia = p.get("item_a")
-            ib = p.get("item_b")
+            ia = clean_text_content(p.get("item_a"))
+            ib = clean_text_content(p.get("item_b"))
             if ia and ib and ia not in used_a and ib not in used_b:
                 used_a.add(ia)
                 used_b.add(ib)
