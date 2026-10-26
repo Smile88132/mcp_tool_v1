@@ -16,6 +16,7 @@ import json
 import uuid
 import argparse
 import unicodedata
+import time
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
@@ -1081,10 +1082,12 @@ def call_aselix_chat(
     api_key: Optional[str] = None,
     model: str = "aselix-llm-v1",
     messages: Optional[List[Dict[str, str]]] = None,
-    temperature: float = 0.2
+    temperature: float = 0.2,
+    timeout: int = 50
 ) -> Dict[str, Any]:
     """
     ASELSAN AselixAI POST /chat/completions endpointine OpenAI uyumlu istek gönderir.
+    1 dakikalık (varsayılan timeout=50sn) zaman aşımı sınırını kesinlikle aşmaz.
     """
     if not base_url:
         base_url = "https://api.aselixai.aselsan.com.tr/v1"
@@ -1103,7 +1106,7 @@ def call_aselix_chat(
     }
 
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=60, verify=False)
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout, verify=False)
         if resp.status_code == 200:
             data = resp.json()
             content = ""
@@ -1129,12 +1132,181 @@ def call_aselix_chat(
                 "hata_kodu": resp.status_code,
                 "mesaj": f"AselixAI API Hatası ({resp.status_code}): {resp.text}"
             }
+    except requests.exceptions.Timeout:
+        return {
+            "durum": "zaman_asimi",
+            "hata_kodu": 408,
+            "mesaj": f"AselixAI API isteği {timeout} saniye içinde yanıt vermedi (1 dakikalık zaman aşımı koruması devreye girdi)."
+        }
     except Exception as e:
         return {
             "durum": "hata",
             "hata_turu": type(e).__name__,
             "mesaj": f"AselixAI API Çağrı Hatası: {str(e)}"
         }
+
+
+def extract_json_array_from_llm(text: str) -> List[Dict[str, Any]]:
+    """LLM metin çıktısından JSON dizisini ayıklar."""
+    if not text:
+        return []
+    cleaned = text.strip()
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```")[1].split("```")[0].strip()
+
+    start_idx = cleaned.find("[")
+    end_idx = cleaned.rfind("]")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        cleaned = cleaned[start_idx:end_idx + 1]
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        pass
+    return []
+
+
+def compare_items_with_aselix_batch(
+    base_url: str,
+    api_key: str,
+    model: str,
+    items_a_batch: List[str],
+    candidates_b: List[str],
+    threshold: float = 0.8,
+    timeout: int = 50
+) -> Dict[str, Any]:
+    """
+    1 dakikalık (timeout=50sn) zaman aşımı limitini kesinlikle aşmayacak şekilde
+    küçük bir batch (10-15 kayıt) için AselixAI API'si üzerinden anlamsal kıyaslama yapar.
+    """
+    if not items_a_batch or not candidates_b:
+        return {
+            "durum": "basarili",
+            "matched_pairs": [],
+            "unmatched_a": items_a_batch,
+            "kaynak": "bos_liste"
+        }
+
+    # Eğer API Key yoksa yerel fuzzy matching kullan
+    if not api_key or not api_key.strip():
+        local_res = compute_fuzzy_venn(items_a_batch, candidates_b, threshold=threshold)
+        return {
+            "durum": "basarili",
+            "matched_pairs": local_res["matched_pairs"],
+            "unmatched_a": local_res["only_a_items"],
+            "kaynak": "yerel_ml"
+        }
+
+    # Liste formatını hazırla
+    list_a_text = "\n".join([f"{i+1}. {clean_text_content(item)}" for i, item in enumerate(items_a_batch)])
+    list_b_text = "\n".join([f"{j+1}. {clean_text_content(cand)}" for j, cand in enumerate(candidates_b)])
+
+    system_prompt = (
+        "Sen ASELSAN Sistem ve Kalite Güvence mühendisliği uzmanı bir yapay zeka analiz asistanısın. "
+        "Görevin, iki test fazından alınan uygunsuzluk maddelerini karşılaştırmak ve anlamsal olarak aynı "
+        "veya eşdeğer arıza/sapmayı ifade edenleri eşleştirmektir. "
+        "Farklı kelimeler veya eş anlamlı terimler kullanılmış olsa bile aynı teknik problemi ifade ediyorsa eşleştir. "
+        "Yanıtını YALNIZCA geçerli bir JSON dizisi olarak üret, başka hiçbir açıklama metni ekleme."
+    )
+
+    user_prompt = (
+        f"Aşağıdaki Liste A'da yer alan {len(items_a_batch)} adet uygunsuzluğu incele. "
+        "Her bir Liste A maddesi için Liste B'deki adaylar arasında anlamsal olarak aynı teknik arızayı "
+        "ifade eden bir karşılık var mı değerlendir.\n\n"
+        "ÇIKTI FORMATI (Yalnızca aşağıdaki JSON şemasına uygun JSON dizisi döndür):\n"
+        "[\n"
+        "  {\n"
+        '    "item_a": "1. listedeki tam metin",\n'
+        '    "item_b": "2. listedeki eşleşen tam metin (eşleşme yoksa null)",\n'
+        '    "is_match": true veya false,\n'
+        '    "similarity": 50 ile 100 arasında benzerlik yüzdesi (eşleşme yoksa 0),\n'
+        '    "reason": "Kısa eşleşme gerekçesi"\n'
+        "  }\n"
+        "]\n\n"
+        f"--- LİSTE A ({len(items_a_batch)} Kayıt) ---\n{list_a_text}\n\n"
+        f"--- LİSTE B ({len(candidates_b)} Aday Kayıt) ---\n{list_b_text}\n"
+    )
+
+    chat_res = call_aselix_chat(
+        base_url=base_url,
+        api_key=api_key,
+        model=model or "aselix-llm-v1",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        temperature=0.1,
+        timeout=timeout  # 1 dakikayı kesinlikle aşmayacak (50sn)
+    )
+
+    if chat_res.get("durum") != "basarili":
+        # API zaman aşımı veya bağlantı hatası durumunda yerel fuzzy distance ile kurtar
+        local_res = compute_fuzzy_venn(items_a_batch, candidates_b, threshold=threshold)
+        return {
+            "durum": "uyari",
+            "api_hatasi": chat_res.get("mesaj"),
+            "matched_pairs": local_res["matched_pairs"],
+            "unmatched_a": local_res["only_a_items"],
+            "kaynak": "yerel_fallback"
+        }
+
+    raw_output = chat_res.get("cevap", "")
+    parsed_matches = extract_json_array_from_llm(raw_output)
+
+    matched_pairs = []
+    matched_a = set()
+    matched_b = set()
+    threshold_pct = threshold * 100
+
+    for m in parsed_matches:
+        if not isinstance(m, dict):
+            continue
+        item_a = str(m.get("item_a") or "").strip()
+        item_b = str(m.get("item_b") or "").strip()
+        is_match = bool(m.get("is_match"))
+        sim = float(m.get("similarity") or 0.0)
+
+        if is_match and item_b and item_b.lower() not in ["null", "none", "yok"] and sim >= threshold_pct:
+            # item_b'yi candidates_b içindeki tam metin ile eşle
+            matched_cand = None
+            for cand in candidates_b:
+                if normalize_str(cand) == normalize_str(item_b) or cand in item_b or item_b in cand:
+                    matched_cand = cand
+                    break
+            if not matched_cand:
+                matched_cand = item_b
+
+            matched_pairs.append({
+                "item_a": item_a,
+                "item_b": matched_cand,
+                "similarity": round(sim, 1),
+                "match_type": f"AI Semantik (%{round(sim, 1)})",
+                "ai_reason": str(m.get("reason") or "AselixAI anlamsal eşleşmesi")
+            })
+            matched_a.add(item_a)
+            matched_b.add(matched_cand)
+
+    # LLM'in eşleştiremediği veya JSON'da eksik kalanlar için fuzzy mesafe kontrolü
+    unmatched_a = [a for a in items_a_batch if a not in matched_a]
+    remaining_b = [b for b in candidates_b if b not in matched_b]
+
+    if unmatched_a and remaining_b:
+        local_fallback = compute_fuzzy_venn(unmatched_a, remaining_b, threshold=threshold)
+        for pair in local_fallback["matched_pairs"]:
+            matched_pairs.append(pair)
+            matched_a.add(pair["item_a"])
+        unmatched_a = local_fallback["only_a_items"]
+
+    return {
+        "durum": "basarili",
+        "matched_pairs": matched_pairs,
+        "unmatched_a": unmatched_a,
+        "kaynak": "aselix_ai"
+    }
 
 
 # ==============================================================================
@@ -1209,6 +1381,31 @@ try:
         messages: List[Dict[str, str]]
         temperature: Optional[float] = 0.2
         context: Optional[Dict[str, Any]] = None
+
+    class BatchChunkRequest(BaseModel):
+        base_url: Optional[str] = "https://api.aselixai.aselsan.com.tr/v1"
+        api_key: Optional[str] = ""
+        model: Optional[str] = "aselix-llm-v1"
+        batch_index: int = 1
+        total_batches: int = 1
+        items_a_batch: List[str]
+        candidates_b: List[str]
+        threshold: Optional[float] = 0.8
+        timeout_sec: Optional[int] = 50
+
+    class BatchFinalizeRequest(BaseModel):
+        base_url: Optional[str] = "https://api.aselixai.aselsan.com.tr/v1"
+        api_key: Optional[str] = ""
+        model: Optional[str] = "aselix-llm-v1"
+        doc1_name: Optional[str] = "1. Veri"
+        doc2_name: Optional[str] = "2. Veri"
+        col1_name: Optional[str] = None
+        col2_name: Optional[str] = None
+        threshold: float = 0.8
+        all_items_a: List[str]
+        all_items_b: List[str]
+        matched_pairs: List[Dict[str, Any]]
+        need_executive_summary: bool = True
 
     @web_app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
@@ -1547,22 +1744,66 @@ try:
         if not items_1 or not items_2:
             return {"durum": "hata", "mesaj": "Kıyaslama yapılacak geçerli satır veya veri bulunamadı."}
 
-        # Yerel Fuzzy Distance / Levenshtein + Token Kümeleri Benzerliği
-        venn_res = compute_fuzzy_venn(items_1, items_2, threshold=threshold)
-
-        jaccard_pct = round(venn_res["jaccard_similarity"] * 100, 1)
-        summary_note = (
-            f"'{doc1_name}' ({len(set(items_1))} kayıt) ile '{doc2_name}' ({len(set(items_2))} kayıt) kıyaslandı. "
-            f"Benzerlik eşiği %{round(threshold * 100)} olarak uygulandı. "
-            f"Toplam {venn_res['total_unique']} farklı uygunsuzluk tespit edildi. "
-            f"{venn_res['intersection_count']} uygunsuzluk her iki belgede de ortaktır (Jaccard Benzerlik Oranı: %{jaccard_pct}). "
-            f"{venn_res['only_a_count']} uygunsuzluk yalnızca 1. grupta, {venn_res['only_b_count']} uygunsuzluk ise yalnızca 2. grupta yer almaktadır."
-        )
-
         ai_summary = ""
         ai_durum = "kapali"
 
         if engine_mode == "aselix" and api_key and api_key.strip():
+            # 1 Dakikalık zaman aşımını aşmamak için 15'lik batch'ler halinde AselixAI'ye gönder
+            batch_size = 15
+            all_matched_pairs = []
+            used_b = set()
+
+            for i in range(0, len(items_1), batch_size):
+                chunk_a = items_1[i:i + batch_size]
+                chunk_res = compare_items_with_aselix_batch(
+                    base_url=base_url or "https://api.aselixai.aselsan.com.tr/v1",
+                    api_key=api_key,
+                    model=model or "aselix-llm-v1",
+                    items_a_batch=chunk_a,
+                    candidates_b=items_2,
+                    threshold=threshold,
+                    timeout=50  # 1 dakikayı kesinlikle aşmayacak koruma
+                )
+                for p in chunk_res.get("matched_pairs", []):
+                    if p["item_b"] not in used_b:
+                        used_b.add(p["item_b"])
+                        all_matched_pairs.append(p)
+
+            # Kalan eşleşmemişler için küme oluştur
+            matched_a = {p["item_a"] for p in all_matched_pairs}
+            clean_1 = [clean_text_content(x) for x in items_1 if clean_text_content(x)]
+            clean_2 = [clean_text_content(x) for x in items_2 if clean_text_content(x)]
+            unique_1 = list(dict.fromkeys(clean_1))
+            unique_2 = list(dict.fromkeys(clean_2))
+
+            only_a = [a for a in unique_1 if a not in matched_a]
+            only_b = [b for b in unique_2 if b not in used_b]
+
+            total_unique = len(all_matched_pairs) + len(only_a) + len(only_b)
+            jaccard = round(len(all_matched_pairs) / total_unique, 4) if total_unique > 0 else 1.0
+
+            venn_res = {
+                "intersection_count": len(all_matched_pairs),
+                "only_a_count": len(only_a),
+                "only_b_count": len(only_b),
+                "total_unique": total_unique,
+                "jaccard_similarity": jaccard,
+                "matched_pairs": all_matched_pairs,
+                "intersection_items": [f"{p['item_a']} ↔ {p['item_b']} (%{p.get('similarity', 100)})" if p['item_a'] != p['item_b'] else p['item_a'] for p in all_matched_pairs],
+                "only_a_items": sorted(only_a),
+                "only_b_items": sorted(only_b),
+                "threshold_used": threshold
+            }
+
+            jaccard_pct = round(jaccard * 100, 1)
+            summary_note = (
+                f"'{doc1_name}' ({len(unique_1)} kayıt) ile '{doc2_name}' ({len(unique_2)} kayıt) AselixAI API ile batchler halinde kıyaslandı. "
+                f"Benzerlik eşiği %{round(threshold * 100)} uygulandı. Toplam {total_unique} farklı uygunsuzluk tespit edildi. "
+                f"{len(all_matched_pairs)} uygunsuzluk her iki grupta da ortaktır (Jaccard: %{jaccard_pct}). "
+                f"{len(only_a)} uygunsuzluk yalnızca 1. grupta, {len(only_b)} uygunsuzluk ise yalnızca 2. grupta yer almaktadır."
+            )
+
+            # Yönetici Özeti (timeout=50sn < 1dk)
             sample_common = "\n- ".join(venn_res["intersection_items"][:10]) or "Yok"
             sample_only_b = "\n- ".join(venn_res["only_b_items"][:8]) or "Yok"
             sample_only_a = "\n- ".join(venn_res["only_a_items"][:8]) or "Yok"
@@ -1596,7 +1837,9 @@ try:
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg}
-                ]
+                ],
+                temperature=0.2,
+                timeout=50  # 1 dakikayı kesinlikle aşmayacak koruma
             )
             if chat_res.get("durum") == "basarili":
                 ai_summary = chat_res.get("cevap", "")
@@ -1604,6 +1847,17 @@ try:
             else:
                 ai_summary = f"AselixAI API Uyarısı: {chat_res.get('mesaj', '')}"
                 ai_durum = "uyari"
+
+        else: # engine_mode == "local"
+            venn_res = compute_fuzzy_venn(items_1, items_2, threshold=threshold)
+            jaccard_pct = round(venn_res["jaccard_similarity"] * 100, 1)
+            summary_note = (
+                f"'{doc1_name}' ({len(set(items_1))} kayıt) ile '{doc2_name}' ({len(set(items_2))} kayıt) yerel ML ile kıyaslandı. "
+                f"Benzerlik eşiği %{round(threshold * 100)} olarak uygulandı. "
+                f"Toplam {venn_res['total_unique']} farklı uygunsuzluk tespit edildi. "
+                f"{venn_res['intersection_count']} uygunsuzluk her iki belgede de ortaktır (Jaccard Benzerlik Oranı: %{jaccard_pct}). "
+                f"{venn_res['only_a_count']} uygunsuzluk yalnızca 1. grupta, {venn_res['only_b_count']} uygunsuzluk ise yalnızca 2. grupta yer almaktadır."
+            )
 
         return {
             "durum": "basarili",
@@ -1619,6 +1873,142 @@ try:
             "flow_analiz_ozeti": ai_summary,
             "ai_durum": ai_durum,
             "model_kullanilan": model
+        }
+
+    @web_app.post("/api/compare/batch-chunk")
+    async def api_compare_batch_chunk(req: BatchChunkRequest):
+        """
+        1 dakikalık zaman aşımını aşmayacak şekilde tek bir batch (10-15 satır) için
+        AselixAI anlamsal kıyaslama isteği yürütür.
+        """
+        t_start = time.time()
+        res = compare_items_with_aselix_batch(
+            base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
+            api_key=req.api_key,
+            model=req.model or "aselix-llm-v1",
+            items_a_batch=req.items_a_batch,
+            candidates_b=req.candidates_b,
+            threshold=req.threshold or 0.8,
+            timeout=req.timeout_sec or 50
+        )
+        elapsed = round(time.time() - t_start, 2)
+        res["batch_index"] = req.batch_index
+        res["total_batches"] = req.total_batches
+        res["gecen_sure_sn"] = elapsed
+        return res
+
+    @web_app.post("/api/compare/batch-finalize")
+    async def api_compare_batch_finalize(req: BatchFinalizeRequest):
+        """
+        Tüm batch'lerden toplanan eşleşmeleri birleştirir, Venn şeması küme istatistiklerini
+        hesaplar ve AselixAI ile hızlı bir yönetici özeti (< 1 dakika) üretir.
+        """
+        clean_a = [clean_text_content(x) for x in req.all_items_a if clean_text_content(x)]
+        clean_b = [clean_text_content(x) for x in req.all_items_b if clean_text_content(x)]
+        unique_a = list(dict.fromkeys(clean_a))
+        unique_b = list(dict.fromkeys(clean_b))
+
+        matched_pairs = req.matched_pairs or []
+        used_a = set()
+        used_b = set()
+        dedup_matched = []
+
+        for p in matched_pairs:
+            ia = p.get("item_a")
+            ib = p.get("item_b")
+            if ia and ib and ia not in used_a and ib not in used_b:
+                used_a.add(ia)
+                used_b.add(ib)
+                dedup_matched.append(p)
+
+        only_a = [a for a in unique_a if a not in used_a]
+        only_b = [b for b in unique_b if b not in used_b]
+
+        total_unique = len(dedup_matched) + len(only_a) + len(only_b)
+        jaccard = round(len(dedup_matched) / total_unique, 4) if total_unique > 0 else 1.0
+
+        venn_res = {
+            "intersection_count": len(dedup_matched),
+            "only_a_count": len(only_a),
+            "only_b_count": len(only_b),
+            "total_unique": total_unique,
+            "jaccard_similarity": jaccard,
+            "matched_pairs": dedup_matched,
+            "intersection_items": [f"{p['item_a']} ↔ {p['item_b']} (%{p.get('similarity', 100)})" if p['item_a'] != p['item_b'] else p['item_a'] for p in dedup_matched],
+            "only_a_items": sorted(only_a),
+            "only_b_items": sorted(only_b),
+            "threshold_used": req.threshold
+        }
+
+        jaccard_pct = round(jaccard * 100, 1)
+        summary_note = (
+            f"'{req.doc1_name}' ({len(unique_a)} kayıt) ile '{req.doc2_name}' ({len(unique_b)} kayıt) kıyaslandı. "
+            f"Benzerlik eşiği %{round(req.threshold * 100)} olarak uygulandı. "
+            f"Toplam {total_unique} farklı uygunsuzluk tespit edildi. "
+            f"{len(dedup_matched)} uygunsuzluk her iki grupta da ortaktır (Jaccard: %{jaccard_pct}). "
+            f"{len(only_a)} uygunsuzluk yalnızca 1. grupta, {len(only_b)} uygunsuzluk ise yalnızca 2. grupta yer almaktadır."
+        )
+
+        ai_summary = ""
+        ai_durum = "kapali"
+
+        if req.need_executive_summary and req.api_key and req.api_key.strip():
+            sample_common = "\n- ".join(venn_res["intersection_items"][:10]) or "Yok"
+            sample_only_b = "\n- ".join(venn_res["only_b_items"][:8]) or "Yok"
+            sample_only_a = "\n- ".join(venn_res["only_a_items"][:8]) or "Yok"
+
+            system_msg = (
+                "Sen ASELSAN sistem ve kalite güvence mühendisliği konusunda uzman kıdemli bir yapay zeka analiz asistanısın. "
+                "Kıyaslanan iki test fazı için kök neden risk analizi ve somut aksiyon adımları sunarsın."
+            )
+            user_msg = (
+                f"Kıyaslanan Belgeler: '{req.doc1_name}' vs '{req.doc2_name}'\n"
+                f"İstatistiksel Özet:\n"
+                f"• Toplam Farklı Kayıt: {total_unique}\n"
+                f"• Ortak Kesişim: {len(dedup_matched)}\n"
+                f"• Yalnızca 1. Belgede (Çözülen): {len(only_a)}\n"
+                f"• Yalnızca 2. Belgede (Yeni Ortaya Çıkan): {len(only_b)}\n"
+                f"• Jaccard Benzerlik Oranı: %{jaccard_pct}\n\n"
+                f"Örnek Ortak Uygunsuzluklar:\n- {sample_common}\n\n"
+                f"Örnek Yeni Ortaya Çıkanlar (Yalnızca 2. Belge):\n- {sample_only_b}\n\n"
+                f"Örnek Çözülenler (Yalnızca 1. Belge):\n- {sample_only_a}\n\n"
+                "Lütfen Kalite Güvence Uzmanı olarak:\n"
+                "1. Kronik tekrarlayan ortak uygunsuzlukların kök neden risk analizini yap.\n"
+                "2. Yeni ortaya çıkan beklenmedik sapmaları değerlendir.\n"
+                "3. Kalite ekiplerinin derhal alması gereken 3 somut önleyici aksiyon önerisi sun.\n"
+                "Kısa, net ve yönetici özeti şeklinde yapılandır."
+            )
+            chat_res = call_aselix_chat(
+                base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
+                api_key=req.api_key,
+                model=req.model or "aselix-llm-v1",
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg}
+                ],
+                temperature=0.2,
+                timeout=50  # 1 dakikayı kesinlikle aşmayacak koruma
+            )
+            if chat_res.get("durum") == "basarili":
+                ai_summary = chat_res.get("cevap", "")
+                ai_durum = "basarili"
+            else:
+                ai_summary = f"AselixAI API Uyarısı: {chat_res.get('mesaj', '')}"
+                ai_durum = "uyari"
+
+        return {
+            "durum": "basarili",
+            "engine_mode": "aselix",
+            "dosya_1_adi": req.doc1_name,
+            "dosya_2_adi": req.doc2_name,
+            "karsilastirilan_sutun_1": req.col1_name,
+            "karsilastirilan_sutun_2": req.col2_name,
+            "esik_orani": req.threshold,
+            "ozet_yorum": summary_note,
+            "venn_verileri": venn_res,
+            "flow_analiz_ozeti": ai_summary,
+            "ai_durum": ai_durum,
+            "model_kullanilan": req.model
         }
 
     # --------------------------------------------------------------------------

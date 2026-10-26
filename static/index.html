@@ -106,6 +106,12 @@
           <span class="model-tag">Model:</span>
           <span class="model-name" id="currentModelDisplay">aselix-llm-v1</span>
         </div>
+
+        <!-- 1-Min Timeout & Batch Indicator Pill -->
+        <div class="active-model-pill" id="batchProtectionPill" title="1 dakikalık zaman aşımı koruması devrede. Talepler 15'erli batchler halinde iletilir.">
+          <span class="model-tag">⏱️ İstek Koruması:</span>
+          <span class="model-name" id="batchSizeDisplay">Batch &lt; 1 Dk</span>
+        </div>
       </div>
     </section>
 
@@ -297,12 +303,20 @@
         </button>
       </div>
 
-      <!-- Progress / Loading Banner -->
+      <!-- Progress / Loading Banner with Batch Tracking -->
       <div class="progress-banner" id="progressBanner" style="display: none;">
         <div class="spinner"></div>
-        <div class="progress-details">
-          <h4 id="progressStatusText">Veriler analiz ediliyor ve mesafe hesaplanıyor...</h4>
-          <p id="progressSubText">Yerel ML benzerlik eşleştirmesi yürütülüyor...</p>
+        <div class="progress-details" style="width: 100%;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h4 id="progressStatusText">Veriler analiz ediliyor ve mesafe hesaplanıyor...</h4>
+            <span class="progress-pct-badge" id="progressPctBadge">%0</span>
+          </div>
+          <p id="progressSubText">1 dakikayı aşmayacak şekilde batchler halinde AselixAI API'sine iletiliyor...</p>
+          <div class="progress-bar-wrapper" id="progressBarWrapper" style="display: none; margin-top: 8px;">
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" id="progressBarFill" style="width: 0%;"></div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -597,6 +611,17 @@
             <option value="qwen-2.5-7b-instruct">qwen-2.5-7b-instruct</option>
           </select>
           <div id="fetchModelsStatus" style="display: none; margin-top: 8px; font-size: 12px; padding: 6px 10px; border-radius: 6px;"></div>
+        </div>
+
+        <!-- Batch Size & 1-Minute Timeout Protection Group -->
+        <div class="form-group">
+          <label for="cfgBatchSize">API Kıyaslama Batch Boyutu (1 Dakika Zaman Aşımı Koruması):</label>
+          <select id="cfgBatchSize" class="form-select">
+            <option value="10">10 Kayıt / Batch (~10-20 sn - En Hızlı &amp; Güvenli)</option>
+            <option value="15" selected>15 Kayıt / Batch (~15-30 sn - Önerilen)</option>
+            <option value="20">20 Kayıt / Batch (~25-45 sn)</option>
+          </select>
+          <small class="form-help">API çağrılarının 1 dakikalık ağ zaman aşımına uğramaması için talepler bu boyutta parçalanarak iletilir.</small>
         </div>
 
         <div id="testConnResult" style="display: none; padding: 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; margin-top: 10px;"></div>

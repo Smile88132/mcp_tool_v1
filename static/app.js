@@ -16,6 +16,7 @@
     model: 'aselix-llm-v1',
     engine: 'local', // 'local' or 'aselix'
     threshold: 80,   // %50 - %100
+    batchSize: 15,   // 10, 15, 20 satırlık güvenli batch boyutu
     inputMode: 'excel' // 'excel' or 'paste'
   };
 
@@ -91,6 +92,9 @@
   const progressBanner = document.getElementById('progressBanner');
   const progressStatusText = document.getElementById('progressStatusText');
   const progressSubText = document.getElementById('progressSubText');
+  const progressBarWrapper = document.getElementById('progressBarWrapper');
+  const progressBarFill = document.getElementById('progressBarFill');
+  const progressPctBadge = document.getElementById('progressPctBadge');
   const actionHintText = document.getElementById('actionHintText');
 
   // Results Section
@@ -144,6 +148,7 @@
   const cfgApiKey = document.getElementById('cfgApiKey');
   const btnToggleApiKey = document.getElementById('btnToggleApiKey');
   const cfgModelSelect = document.getElementById('cfgModelSelect');
+  const cfgBatchSize = document.getElementById('cfgBatchSize');
   const fetchModelsStatus = document.getElementById('fetchModelsStatus');
   const testConnResult = document.getElementById('testConnResult');
   const radioMilli = document.getElementById('radioMilli');
@@ -303,6 +308,7 @@
     // Settings modal inputs
     cfgBaseUrl.value = appConfig.baseUrl || NETWORK_URLS.milli;
     cfgApiKey.value = appConfig.apiKey || '';
+    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 15);
 
     if (appConfig.network === 'aynet') {
       radioAynet.checked = true;
@@ -634,15 +640,122 @@
     }
 
     progressBanner.style.display = 'flex';
+    if (progressBarWrapper) progressBarWrapper.style.display = 'block';
+    if (progressBarFill) progressBarFill.style.width = '5%';
+    if (progressPctBadge) progressPctBadge.textContent = '%5';
     btnRunComparison.disabled = true;
 
     const thresholdDec = (appConfig.threshold || 80) / 100.0;
     const isAselix = appConfig.engine === 'aselix';
+    const batchSize = parseInt(appConfig.batchSize, 10) || 15;
 
+    // Metin Modunda ve Aselix seçildiğinde: İstemci tarafında gerçek zamanlı chunking döngüsü
+    if (inputMode === 'paste' && isAselix && appConfig.apiKey && appConfig.apiKey.trim()) {
+      try {
+        const lines1 = textPaste1.value.split('\n').filter(l => l.trim().length > 0);
+        const lines2 = textPaste2.value.split('\n').filter(l => l.trim().length > 0);
+
+        const chunks = [];
+        for (let i = 0; i < lines1.length; i += batchSize) {
+          chunks.push(lines1.slice(i, i + batchSize));
+        }
+        const totalBatches = chunks.length;
+        let allMatchedPairs = [];
+
+        for (let i = 0; i < totalBatches; i++) {
+          const chunk = chunks[i];
+          const startPct = Math.round((i / (totalBatches + 1)) * 100);
+          if (progressBarFill) progressBarFill.style.width = `${Math.max(5, startPct)}%`;
+          if (progressPctBadge) progressPctBadge.textContent = `%${Math.max(5, startPct)}`;
+
+          progressStatusText.textContent = `Batch ${i + 1}/${totalBatches} AselixAI ile işleniyor (${chunk.length} satır)...`;
+          progressSubText.textContent = `1 dakikalık zaman aşımı koruması devrede (Timeout: 50 sn) • Model: ${appConfig.model || 'aselix-llm-v1'}`;
+
+          const chunkResp = await fetch('/api/compare/batch-chunk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              base_url: appConfig.baseUrl,
+              api_key: appConfig.apiKey,
+              model: appConfig.model || 'aselix-llm-v1',
+              items_a_batch: chunk,
+              candidates_b: lines2,
+              threshold: thresholdDec,
+              timeout_sec: 50,
+              batch_index: i + 1,
+              total_batches: totalBatches
+            })
+          });
+
+          const chunkData = await chunkResp.json();
+          if (chunkData.matched_pairs && Array.isArray(chunkData.matched_pairs)) {
+            allMatchedPairs.push(...chunkData.matched_pairs);
+          }
+        }
+
+        // Finalize: Kümeleri birleştir & Yönetici Özeti üret
+        progressStatusText.textContent = 'Tüm batch sonuçları birleştiriliyor ve AselixAI Yönetici Özeti üretiliyor...';
+        progressSubText.textContent = `Toplam ${allMatchedPairs.length} eşleşme bulundu. Kök neden ve risk analizi derleniyor...`;
+        if (progressBarFill) progressBarFill.style.width = '90%';
+        if (progressPctBadge) progressPctBadge.textContent = '%90';
+
+        const finalResp = await fetch('/api/compare/batch-finalize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base_url: appConfig.baseUrl,
+            api_key: appConfig.apiKey,
+            model: appConfig.model || 'aselix-llm-v1',
+            threshold: thresholdDec,
+            all_items_a: lines1,
+            all_items_b: lines2,
+            matched_pairs: allMatchedPairs,
+            doc1_name: '1. Metin Seti',
+            doc2_name: '2. Metin Seti',
+            col1_name: 'Metin',
+            col2_name: 'Metin',
+            need_executive_summary: true
+          })
+        });
+
+        const finalData = await finalResp.json();
+        if (progressBarFill) progressBarFill.style.width = '100%';
+        if (progressPctBadge) progressPctBadge.textContent = '%100';
+
+        btnRunComparison.disabled = false;
+        setTimeout(() => { progressBanner.style.display = 'none'; }, 400);
+
+        if (finalData.durum === 'basarili') {
+          renderAnalysisResults(finalData);
+        } else {
+          alert('Kıyaslama Hatası: ' + (finalData.mesaj || 'İşlem tamamlanamadı.'));
+        }
+        return;
+      } catch (err) {
+        btnRunComparison.disabled = false;
+        progressBanner.style.display = 'none';
+        alert('Batch iletişim hatası: ' + err.message);
+        return;
+      }
+    }
+
+    // Excel veya Yerel ML Modu
     progressStatusText.textContent = isAselix 
-      ? 'Veriler kıyaslanıyor ve ASELSAN AselixAI yönetici özeti üretiliyor...'
+      ? 'Veriler 1 dakikalık güvenli batch\'ler halinde AselixAI API\'ye aktarılıyor...'
       : 'Veriler yerel mesafe ve fuzzy matching algoritması ile kıyaslanıyor...';
-    progressSubText.textContent = `Benzerlik toleransı: %${appConfig.threshold} • Motor: ${isAselix ? 'AselixAI (' + appConfig.model + ')' : 'Yerel ML'}`;
+    progressSubText.textContent = `Benzerlik toleransı: %${appConfig.threshold} • Motor: ${isAselix ? 'AselixAI (Batch boyutu: ' + batchSize + ')' : 'Yerel ML'}`;
+
+    let progressSimInterval = null;
+    if (isAselix) {
+      let currentSimPct = 10;
+      progressSimInterval = setInterval(() => {
+        if (currentSimPct < 85) {
+          currentSimPct += 5;
+          if (progressBarFill) progressBarFill.style.width = `${currentSimPct}%`;
+          if (progressPctBadge) progressPctBadge.textContent = `%${currentSimPct}`;
+        }
+      }, 1500);
+    }
 
     try {
       const formData = new FormData();
@@ -670,9 +783,13 @@
         body: formData
       });
 
+      if (progressSimInterval) clearInterval(progressSimInterval);
+      if (progressBarFill) progressBarFill.style.width = '100%';
+      if (progressPctBadge) progressPctBadge.textContent = '%100';
+
       const data = await resp.json();
       btnRunComparison.disabled = false;
-      progressBanner.style.display = 'none';
+      setTimeout(() => { progressBanner.style.display = 'none'; }, 400);
 
       if (data.durum === 'basarili') {
         renderAnalysisResults(data);
@@ -680,6 +797,7 @@
         alert('Kıyaslama Hatası: ' + (data.mesaj || 'İşlem tamamlanamadı.'));
       }
     } catch (err) {
+      if (progressSimInterval) clearInterval(progressSimInterval);
       btnRunComparison.disabled = false;
       progressBanner.style.display = 'none';
       alert('Sunucu iletişim hatası: ' + err.message);
@@ -1085,6 +1203,7 @@
   function openSettingsModal() {
     cfgBaseUrl.value = appConfig.baseUrl || NETWORK_URLS.milli;
     cfgApiKey.value = appConfig.apiKey || '';
+    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 15);
 
     if (appConfig.network === 'aynet') radioAynet.checked = true;
     else if (appConfig.network === 'custom') radioCustom.checked = true;
@@ -1108,6 +1227,7 @@
     appConfig.baseUrl = cfgBaseUrl.value.trim() || NETWORK_URLS.milli;
     appConfig.apiKey = cfgApiKey.value.trim();
     appConfig.model = cfgModelSelect.value || 'aselix-llm-v1';
+    if (cfgBatchSize) appConfig.batchSize = parseInt(cfgBatchSize.value, 10) || 15;
 
     saveConfig();
     applyConfigToUI();

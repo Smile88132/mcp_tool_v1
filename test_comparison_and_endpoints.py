@@ -90,6 +90,60 @@ class TestTwoExcelComparison(unittest.TestCase):
         self.assertIn("modeller", res)
         self.assertGreater(len(res["modeller"]), 0)
 
+    def test_batch_comparison_offline_fallback(self):
+        from app import compare_items_with_aselix_batch
+        # When no API key is provided, it must safely execute via local fuzzy distance
+        batch_a = ["Pano etiketleme eksik", "Kablo kopuk"]
+        cands_b = ["etiketleme eksik pano", "Hidrolik sızıntı"]
+        res = compare_items_with_aselix_batch(
+            base_url="https://api.aselixai.aselsan.com.tr/v1",
+            api_key="",
+            model="aselix-llm-v1",
+            items_a_batch=batch_a,
+            candidates_b=cands_b,
+            threshold=0.8,
+            timeout=50
+        )
+        self.assertEqual(res["durum"], "basarili")
+        self.assertEqual(len(res["matched_pairs"]), 1)
+        self.assertEqual(res["matched_pairs"][0]["item_a"], "Pano etiketleme eksik")
+
+    def test_batch_endpoints_with_testclient(self):
+        from fastapi.testclient import TestClient
+        from app import web_app
+        client = TestClient(web_app)
+        
+        # 1. Batch Chunk endpoint
+        chunk_res = client.post("/api/compare/batch-chunk", json={
+            "batch_index": 1,
+            "total_batches": 1,
+            "items_a_batch": ["Kablo gevşek"],
+            "candidates_b": ["Kablo gevşek", "Optik hata"],
+            "threshold": 0.8,
+            "api_key": ""
+        })
+        self.assertEqual(chunk_res.status_code, 200)
+        c_data = chunk_res.json()
+        self.assertEqual(c_data["durum"], "basarili")
+        self.assertEqual(len(c_data["matched_pairs"]), 1)
+
+        # 2. Batch Finalize endpoint
+        finalize_res = client.post("/api/compare/batch-finalize", json={
+            "doc1_name": "Test1",
+            "doc2_name": "Test2",
+            "threshold": 0.8,
+            "all_items_a": ["Kablo gevşek", "Hata A"],
+            "all_items_b": ["Kablo gevşek", "Hata B"],
+            "matched_pairs": c_data["matched_pairs"],
+            "need_executive_summary": False
+        })
+        self.assertEqual(finalize_res.status_code, 200)
+        f_data = finalize_res.json()
+        self.assertEqual(f_data["durum"], "basarili")
+        self.assertEqual(f_data["venn_verileri"]["intersection_count"], 1)
+        self.assertEqual(f_data["venn_verileri"]["only_a_count"], 1)
+        self.assertEqual(f_data["venn_verileri"]["only_b_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
