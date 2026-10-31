@@ -1877,10 +1877,11 @@ def compute_embedding_venn(
 ENV_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
 
-def load_env_file_vars(env_path: Optional[str] = None) -> Dict[str, str]:
+def load_env_file_vars(env_path: Optional[str] = None, override: bool = False) -> Dict[str, str]:
     """
     Proje dizinindeki `.env` dosyasını okur ve hem sözlük olarak döndürür hem de
     `os.environ` içerisine aktarır. Harici paket (`python-dotenv`) olmasa bile çalışır.
+    `override=False` olduğunda mevcut ortam değişkenleri ezilmez.
     """
     target_path = env_path or ENV_FILE_PATH
     loaded: Dict[str, str] = {}
@@ -1897,10 +1898,35 @@ def load_env_file_vars(env_path: Optional[str] = None) -> Dict[str, str]:
                 val = v.strip().strip('"').strip("'")
                 if key:
                     loaded[key] = val
-                    os.environ[key] = val
+                    if override or key not in os.environ:
+                        os.environ[key] = val
     except Exception as e:
         _safe_log(f"[ENV-WARN] .env okunurken uyarı: {e}")
     return loaded
+
+
+# Modül yüklendiğinde .env değişkenlerini derhal os.environ'a aktar
+load_env_file_vars()
+
+
+def get_server_config() -> Dict[str, Any]:
+    """
+    `.env` dosyasından ve ortam değişkenlerinden HTTP sunucu host ve port bilgilerini
+    dinamik olarak alır. (APP_PORT / PORT, APP_HOST / HOST)
+    """
+    load_env_file_vars()
+    host = (os.environ.get("APP_HOST") or os.environ.get("HOST") or "0.0.0.0").strip()
+    raw_port = (os.environ.get("APP_PORT") or os.environ.get("PORT") or "8000").strip()
+    try:
+        port = int(raw_port)
+    except Exception:
+        port = 8000
+    return {
+        "host": host,
+        "port": port,
+        "app_host": host,
+        "app_port": port
+    }
 
 
 def get_db_config() -> Dict[str, Any]:
@@ -2249,6 +2275,7 @@ def verify_and_init_database_on_startup() -> Dict[str, Any]:
         "durum": "basarili",
         "env_dosyasi": db_cfg["env_file"],
         "env_dosyasi_mevcut": db_cfg["env_file_exists"],
+        "sunucu": get_server_config(),
         "baglanti": {
             "host": db_cfg["host"],
             "port": db_cfg["port"],
@@ -3382,13 +3409,15 @@ try:
     async def index(request: Request):
         accept_header = request.headers.get("accept", "")
         if "application/json" in accept_header and "text/html" not in accept_header:
+            srv_cfg = get_server_config()
+            host_header = request.headers.get("host") or f"{srv_cfg['host']}:{srv_cfg['port']}"
             return JSONResponse({
                 "servis": "VennFlow AI - Excel Kıyaslama ve Venn Analiz Sunucusu",
                 "durum": "aktif",
-                "ag_erisim_adresi": "http://0.0.0.0:8000",
+                "ag_erisim_adresi": f"http://{host_header}",
                 "mcp_http_endpoint": "/mcp",
                 "interaktif_swagger_arayuzu": "/docs",
-                "web_arayuzu": "http://0.0.0.0:8000/"
+                "web_arayuzu": f"http://{host_header}/"
             })
 
         index_file = os.path.join(static_dir, "index.html")
@@ -4797,6 +4826,11 @@ except Exception as import_err:
 # ==============================================================================
 
 def main():
+    load_env_file_vars()
+    srv_cfg = get_server_config()
+    default_host = srv_cfg["host"]
+    default_port = srv_cfg["port"]
+
     parser = argparse.ArgumentParser(
         description="Venn Diagram Nonconformity RAG & HTTP Server (Intranet Compatible)"
     )
@@ -4808,17 +4842,20 @@ def main():
     )
     parser.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="Ağ adresi (varsayılan: 0.0.0.0, intranet üzerindeki herkese açık)."
+        default=None,
+        help=f"Ağ adresi (varsayılan: .env içindeki APP_HOST/HOST veya '{default_host}')."
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Port numarası (varsayılan: 8000)."
+        default=None,
+        help=f"Port numarası (varsayılan: .env içindeki APP_PORT/PORT veya {default_port})."
     )
 
     args = parser.parse_args()
+
+    effective_host = args.host if args.host is not None else default_host
+    effective_port = args.port if args.port is not None else default_port
 
     # 1. Ağdaki Herkese Açık Standart HTTP Modu (Önerilen)
     if args.transport in ["http", "sse"]:
@@ -4827,12 +4864,13 @@ def main():
             f"\n"
             f"===============================================================================\n"
             f"[HTTP SUNUCUSU] Agdaki Herkese Acik Olarak Baslatiliyor!\n"
-            f"Adres: http://{args.host}:{args.port}\n"
-            f"Tarayicidan erisim / Dokumantasyon: http://<SANAL_PC_IP>:{args.port}/docs\n"
+            f"Adres: http://{effective_host}:{effective_port}\n"
+            f"Tarayicidan erisim / Dokumantasyon: http://<SANAL_PC_IP>:{effective_port}/docs\n"
+            f"Yapilandirma: .env (APP_PORT={default_port}, APP_HOST={default_host})\n"
             f"Durdurmak icin CTRL+C tuslarina basin.\n"
             f"===============================================================================\n\n"
         )
-        uvicorn.run(web_app or "app:web_app", host=args.host, port=args.port, reload=False)
+        uvicorn.run(web_app or "app:web_app", host=effective_host, port=effective_port, reload=False)
 
     # 2. Yerel stdio Modu (Aynı PC'de LLM istemcisi için)
     elif args.transport == "stdio":

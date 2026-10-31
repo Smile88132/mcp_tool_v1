@@ -430,6 +430,19 @@ class TestKokpitIdentityAndEmbedding(unittest.TestCase):
         self.assertEqual(s["baglanti"]["dbname"], "ud_kokpit")
         self.assertEqual(s["baglanti"]["schema"], "teslimat_md")
         self.assertIn("kpi_tablosu", s)
+        self.assertIn("sunucu", s)
+        self.assertIn("app_port", s["sunucu"])
+        self.assertEqual(s["sunucu"]["app_port"], 8000)
+
+        # .env üzerinden veya ortam değişkeninden port değiştirilebilirlik testi
+        from unittest import mock
+        from app import get_server_config
+        srv = get_server_config()
+        self.assertEqual(srv["port"], 8000)
+        with mock.patch.dict(os.environ, {"APP_PORT": "9090"}):
+            self.assertEqual(get_server_config()["port"], 9090)
+        with mock.patch.dict(os.environ, {"PORT": "7070", "APP_PORT": ""}):
+            self.assertEqual(get_server_config()["port"], 7070)
 
     def test_admin_only_llm_suite_and_role_visibility(self):
         # 1) Standart kullanıcı (User) oturumu açıldığında LLM Suite Flow URL ve API Key uyarısı dönmemeli
