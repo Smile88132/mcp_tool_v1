@@ -7,9 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/index.css?v=batch2">
+  <link rel="stylesheet" href="/static/index.css?v=v12_bulk_and_home_fix">
 </head>
-<body class="dark-theme">
+<body class="light-theme on-home-page">
   <!-- Glow Background Accents -->
   <div class="glow-orb orb-1"></div>
   <div class="glow-orb orb-2"></div>
@@ -17,58 +17,397 @@
 
   <!-- Header -->
   <header class="app-header">
-    <div class="header-brand">
-      <div class="brand-logo">
-        <svg viewBox="0 0 40 40" width="36" height="36" fill="none">
-          <circle cx="16" cy="20" r="13" fill="url(#grad1)" fill-opacity="0.75" />
-          <circle cx="24" cy="20" r="13" fill="url(#grad2)" fill-opacity="0.75" />
-          <path d="M20 10.5 A 13 13 0 0 1 20 29.5 A 13 13 0 0 1 20 10.5 Z" fill="#60a5fa" fill-opacity="0.5" />
-          <defs>
-            <linearGradient id="grad1" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#3b82f6" />
-              <stop offset="100%" stop-color="#1d4ed8" />
-            </linearGradient>
-            <linearGradient id="grad2" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#8b5cf6" />
-              <stop offset="100%" stop-color="#ec4899" />
-            </linearGradient>
-          </defs>
-        </svg>
+    <div class="header-container">
+      <div class="header-brand">
+        <div class="brand-logo">
+          <svg viewBox="0 0 40 40" width="36" height="36" fill="none">
+            <circle cx="16" cy="20" r="13" fill="url(#grad1)" fill-opacity="0.85" />
+            <circle cx="24" cy="20" r="13" fill="url(#grad2)" fill-opacity="0.85" />
+            <path d="M20 10.5 A 13 13 0 0 1 20 29.5 A 13 13 0 0 1 20 10.5 Z" fill="#60a5fa" fill-opacity="0.5" />
+            <defs>
+              <linearGradient id="grad1" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#2563eb" />
+                <stop offset="100%" stop-color="#1d4ed8" />
+              </linearGradient>
+              <linearGradient id="grad2" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#8b5cf6" />
+                <stop offset="100%" stop-color="#ec4899" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">VennFlow <span class="badge-accent">AI Platform</span></h1>
+          <p class="brand-subtitle">Excel & Metin Kıyaslama • Venn Şeması Analizi • Yerel ML & ASELSAN AselixAI</p>
+        </div>
       </div>
-      <div>
-        <h1 class="brand-title">VennFlow <span class="badge-accent">AI Platform</span></h1>
-        <p class="brand-subtitle">Excel & Metin Kıyaslama • Venn Şeması Analizi • Yerel ML & ASELSAN AselixAI</p>
-      </div>
-    </div>
 
-    <div class="header-actions">
-      <div class="flow-status-pill" id="engineStatusPill" title="Çalışma Modu">
-        <span class="status-dot online"></span>
-        <span class="status-label" id="engineStatusLabel">⚡ Yerel ML (Çevrimdışı)</span>
+      <div class="header-actions">
+        <!-- Kokpit SSO / Iframe Push Identity Pill -->
+        <button class="kokpit-identity-pill waiting" id="btnOpenIdentity" title="Kokpit SSO Kimlik & Dış Input Detayları">
+          <div class="identity-avatar" id="identityAvatar">🔐</div>
+          <div class="identity-info">
+            <span class="identity-name" id="auth-status">Kimlik bilgisi bekleniyor...</span>
+            <span class="identity-meta" id="identityUserMeta">Kokpit Iframe Köprüsü</span>
+          </div>
+          <span class="identity-status-dot" id="identityStatusDot"></span>
+        </button>
+
+        <button class="btn btn-secondary btn-icon" id="btnHeaderKpiTable" title="Veritabanındaki Kayıtlı KPI Tablosunu (teslimat_md.dryrun_fkt_skt_kpi) Görüntüle ve Filtrele">
+          <span>🗄️</span>
+          <span>KPI Kayıtları</span>
+        </button>
+
+        <button class="btn btn-secondary btn-icon" id="btnThemeToggle" title="Temayı Değiştir (Açık / Koyu)">
+          <span id="themeToggleIcon">🌙</span>
+          <span id="themeToggleText">Koyu Tema</span>
+        </button>
+        <div class="flow-status-pill" id="engineStatusPill" title="Çalışma Modu">
+          <span class="status-dot online"></span>
+          <span class="status-label" id="engineStatusLabel">⚡ Yerel ML (Çevrimdışı)</span>
+        </div>
+        <button class="btn btn-secondary btn-icon admin-only-item" id="btnOpenSettings" title="AselixAI API ve Ağ Ayarları (Yalnızca Admin)" style="display: none;">
+          <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>Ayarlar</span>
+        </button>
+        <a href="/docs" target="_blank" class="btn btn-ghost btn-icon admin-only-item" id="btnSwaggerDocs" title="FastAPI ve MCP Dokümantasyonu (Yalnızca Admin)" style="display: none;">
+          <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+          </svg>
+          <span>Swagger API</span>
+        </a>
       </div>
-      <button class="btn btn-secondary btn-icon" id="btnOpenSettings" title="AselixAI API ve Ağ Ayarları">
-        <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-        <span>Ayarlar</span>
-      </button>
-      <a href="/docs" target="_blank" class="btn btn-ghost btn-icon" title="FastAPI ve MCP Dokümantasyonu">
-        <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" stroke-width="2">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <line x1="16" y1="13" x2="8" y2="13"></line>
-          <line x1="16" y1="17" x2="8" y2="17"></line>
-        </svg>
-        <span>Swagger API</span>
-      </a>
     </div>
   </header>
 
   <!-- Main Container -->
   <main class="app-main">
+    <!-- Ana Sayfa / Sekme Navigasyon Çubuğu -->
+    <nav class="main-page-tabs-nav" id="mainPageTabsNav">
+      <div class="main-page-tabs-left">
+        <button type="button" class="main-page-tab-btn active" data-page-tab="home" id="pageTabBtnHome">
+          <span class="tab-emoji">🏠</span>
+          <span>Ana Sayfa</span>
+        </button>
+        <button type="button" class="main-page-tab-btn" data-page-tab="vennflow" id="pageTabBtnVennflow">
+          <span class="tab-emoji">🔵</span>
+          <span>VennFlow</span>
+          <span class="tab-pill-sub">Tekli Kıyaslama</span>
+        </button>
+        <button type="button" class="main-page-tab-btn" data-page-tab="bulk" id="pageTabBtnBulk">
+          <span class="tab-emoji">📦</span>
+          <span>Toplu Veri Girişi</span>
+          <span class="tab-pill-sub">Şablon Excel &amp; SD/Kalem Eşleştirme</span>
+        </button>
+      </div>
+      <div class="main-page-tabs-right">
+        <button type="button" class="btn btn-secondary btn-sm" id="btnNavOpenKpiPopup">
+          🗄️ KPI Kayıtları Tablosu (Pop-Up)
+        </button>
+      </div>
+    </nav>
+
+    <!-- ======================================================================
+         BAĞIMSIZ GİRİŞ EKRANI (STANDALONE GLASS FIGHTER-SELECT PORTAL)
+         ====================================================================== -->
+    <div id="pageViewHome" class="page-tab-view portal-standalone-view">
+      <!-- Yüzen Glass HUD Üst Kimlik & Tema Çubuğu (Navbar Değildir) -->
+      <div class="portal-floating-hud">
+        <div class="portal-hud-brand">
+          <div class="portal-hud-logo">
+            <svg viewBox="0 0 40 40" width="32" height="32" fill="none">
+              <circle cx="15" cy="20" r="12" fill="#3b82f6" fill-opacity="0.85" />
+              <circle cx="25" cy="20" r="12" fill="#8b5cf6" fill-opacity="0.85" />
+              <path d="M20 11 A 12 12 0 0 1 20 29 A 12 12 0 0 1 20 11 Z" fill="#38bdf8" fill-opacity="0.65" />
+            </svg>
+          </div>
+          <div class="portal-hud-titles">
+            <span class="portal-hud-name">VennFlow <em>AI Platform</em></span>
+            <span class="portal-hud-tag">UGESUDKOKPİT • TESLİMAT_MD VERİ MERKEZİ</span>
+          </div>
+        </div>
+
+        <div class="portal-hud-center-prompt">
+          <span class="portal-prompt-dot"></span>
+          <span>MODÜL SEÇİMİ • KEŞFETMEK İÇİN PANELİN ÜZERİNE GELİN</span>
+        </div>
+
+        <div class="portal-hud-controls">
+          <button type="button" class="portal-glass-pill" id="btnPortalIdentity" title="Kokpit SSO Kimlik & Dış Input Detayları">
+            <span>🔐</span>
+            <span id="portalIdentityText">Kokpit SSO</span>
+          </button>
+          <button type="button" class="portal-glass-pill" id="btnPortalThemeToggle" title="Temayı Değiştir (Açık / Koyu)">
+            <span id="portalThemeIcon">🌙</span>
+            <span>Tema</span>
+          </button>
+          <button type="button" class="portal-glass-pill admin-only-item" id="btnPortalSettings" title="AselixAI API ve Ağ Ayarları (Yalnızca Admin)" style="display: none;">
+            <span>⚙️</span>
+            <span>Ayarlar</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Eğik Çizgili (Slanted) Dövüşçü Seçim Sahnesi -->
+      <div class="fighter-select-stage">
+
+        <!-- ================================================================
+             PANEL 01: VENNFLOW (TEKLİ KIYASLAMA & VENN KÜME MOTORU)
+             ================================================================ -->
+        <article class="fighter-blade blade-vennflow" id="cardModuleVennflow" data-target-action="vennflow" tabindex="0">
+          <div class="blade-ambient-glow"></div>
+          <div class="blade-grid-pattern"></div>
+
+          <div class="fighter-blade-inner">
+            <div class="blade-top-meta">
+              <span class="blade-index-num">01</span>
+              <span class="blade-class-badge">İKİ FAALİYET KIYASLAMA MOTORU</span>
+            </div>
+
+            <!-- Görsel Amblem: İnteraktif Parlayan Venn Küresi -->
+            <div class="blade-emblem-stage">
+              <svg class="blade-svg-art" viewBox="0 0 280 200" fill="none">
+                <defs>
+                  <radialGradient id="vfGlowA" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.55" />
+                    <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0.08" />
+                  </radialGradient>
+                  <radialGradient id="vfGlowB" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stop-color="#a855f7" stop-opacity="0.55" />
+                    <stop offset="100%" stop-color="#6d28d9" stop-opacity="0.08" />
+                  </radialGradient>
+                </defs>
+                <!-- Dış Yörünge Halkası -->
+                <ellipse cx="140" cy="100" rx="122" ry="78" stroke="rgba(96, 165, 250, 0.25)" stroke-width="1.5" stroke-dasharray="6 6" />
+                <!-- Sol Küme: Dry-Run -->
+                <circle class="emblem-circle-left" cx="105" cy="100" r="64" fill="url(#vfGlowA)" stroke="#60a5fa" stroke-width="2.5" />
+                <!-- Sağ Küme: FKT / SKT -->
+                <circle class="emblem-circle-right" cx="175" cy="100" r="64" fill="url(#vfGlowB)" stroke="#c084fc" stroke-width="2.5" />
+                <!-- Kesişim Parlaması -->
+                <path d="M140 46.5 A 64 64 0 0 1 140 153.5 A 64 64 0 0 1 140 46.5 Z" fill="#38bdf8" fill-opacity="0.32" stroke="#7dd3fc" stroke-width="1.5" />
+                <text x="76" y="96" fill="#93c5fd" font-size="13" font-weight="800" text-anchor="middle">DRY-RUN</text>
+                <text x="76" y="113" fill="#bfdbfe" font-size="9.5" font-weight="600" text-anchor="middle">1. Faaliyet</text>
+                <text x="140" y="97" fill="#ffffff" font-size="12" font-weight="800" text-anchor="middle">ORTAK</text>
+                <text x="140" y="112" fill="#bae6fd" font-size="9.5" font-weight="700" text-anchor="middle">Kesişim</text>
+                <text x="204" y="96" fill="#e9d5ff" font-size="13" font-weight="800" text-anchor="middle">FKT / SKT</text>
+                <text x="204" y="113" fill="#d8b4fe" font-size="9.5" font-weight="600" text-anchor="middle">2. Faaliyet</text>
+              </svg>
+            </div>
+
+            <div class="blade-identity-block">
+              <div class="blade-kicker">MODÜL // TEKLİ ANALİZ &amp; VENN ŞEMASI</div>
+              <h2 class="blade-title">VennFlow</h2>
+              <p class="blade-short-desc">
+                İki Excel dosyasını veya metin listesini seçilen <strong>Proje • SD • Kalem</strong> bazında
+                <strong>Dry-Run</strong> ile <strong>FKT / SKT</strong> olarak kıyaslayın.
+              </p>
+            </div>
+
+            <!-- Canlı Telemetri Şeridi -->
+            <div class="blade-telemetry-row">
+              <div class="blade-stat-chip">
+                <span class="blade-stat-num" id="homeStatBakiyeCount">0</span>
+                <span class="blade-stat-lbl">Sipariş Kalemi (<code>bakiye_siparis</code>)</span>
+              </div>
+              <div class="blade-stat-chip">
+                <span class="blade-stat-num"><span id="homeStatOnlyA">0</span> / <span id="homeStatOnlyB">0</span></span>
+                <span class="blade-stat-lbl">Dry-Run / FKT-SKT Benzersiz</span>
+              </div>
+            </div>
+
+            <!-- Üzerine Gelindiğinde (Hover) Açılan Dövüşçü Yetenek/Özellik Listesi -->
+            <div class="blade-hover-drawer">
+              <ul class="blade-skill-list">
+                <li><span class="li-ico">🎯</span><span><code>teslimat_md.bakiye_siparis</code> üzerinden Proje, SD, Kalem ve Ürün Kısa Metni seçimi</span></li>
+                <li><span class="li-ico">🧬</span><span>Yerel ML String Distance, Vektör Embedding ve AselixAI LLM Kök Neden motorları</span></li>
+                <li><span class="li-ico">✕</span><span>Hatalı eşleşmeleri <strong>"Benzer Değil"</strong> ile reddetme ve geri alma</span></li>
+                <li><span class="li-ico">💾</span><span>Tek tıkla <code>teslimat_md.dryrun_fkt_skt_kpi</code> tablosuna JSON destekli kayıt</span></li>
+              </ul>
+
+              <div class="blade-cta-group">
+                <button type="button" class="blade-select-btn primary-blue" id="btnHeroGoVennflow">
+                  <span>⚡ VENNFLOW MODÜLÜNÜ SEÇ</span>
+                  <span class="cta-arrow">→</span>
+                </button>
+                <button type="button" id="btnCardGoVennflow" style="display:none;" aria-hidden="true"></button>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================================================================
+             PANEL 02: TOPLU VERİ GİRİŞİ (AKILLI EXCEL ŞABLONU & SD/KALEM EŞLEŞTİRME)
+             ================================================================ -->
+        <article class="fighter-blade blade-bulk" id="cardModuleBulk" data-target-action="bulk" tabindex="0">
+          <div class="blade-ambient-glow"></div>
+          <div class="blade-grid-pattern"></div>
+
+          <div class="fighter-blade-inner">
+            <div class="blade-top-meta">
+              <span class="blade-index-num">02</span>
+              <span class="blade-class-badge">AKILLI EXCEL &amp; OTOMATİK EŞLEŞTİRİCİ</span>
+            </div>
+
+            <!-- Görsel Amblem: Akıllı Excel Şablonu & Otomatik SD/Kalem Eşleştirme -->
+            <div class="blade-emblem-stage">
+              <svg class="blade-svg-art" viewBox="0 0 280 200" fill="none">
+                <!-- Sol Kart: Excel Tablosu -->
+                <rect x="28" y="34" width="106" height="132" rx="14" fill="rgba(139, 92, 246, 0.18)" stroke="#c084fc" stroke-width="2.2" />
+                <rect x="40" y="48" width="82" height="18" rx="5" fill="rgba(168, 85, 247, 0.45)" />
+                <text x="81" y="61" fill="#ffffff" font-size="9.5" font-weight="800" text-anchor="middle">.XLSX ŞABLON</text>
+                <!-- Satırlar -->
+                <rect x="40" y="74" width="52" height="11" rx="3" fill="rgba(216, 180, 254, 0.35)" />
+                <rect x="96" y="74" width="26" height="11" rx="3" fill="rgba(56, 189, 248, 0.45)" />
+                <rect x="40" y="91" width="52" height="11" rx="3" fill="rgba(216, 180, 254, 0.35)" />
+                <rect x="96" y="91" width="26" height="11" rx="3" fill="rgba(192, 132, 252, 0.45)" />
+                <rect x="40" y="108" width="52" height="11" rx="3" fill="rgba(216, 180, 254, 0.35)" />
+                <rect x="96" y="108" width="26" height="11" rx="3" fill="rgba(52, 211, 153, 0.45)" />
+                <rect x="40" y="128" width="82" height="22" rx="6" fill="rgba(139, 92, 246, 0.35)" stroke="#d8b4fe" stroke-width="1" />
+                <text x="81" y="142" fill="#f3e8ff" font-size="8.5" font-weight="700" text-anchor="middle">SD / Kalem ▼</text>
+
+                <!-- Bağlantı Okları -->
+                <path d="M138 82 C 154 82, 154 82, 168 82" stroke="#e879f9" stroke-width="2.5" stroke-dasharray="4 3" />
+                <path d="M138 118 C 154 118, 154 118, 168 118" stroke="#38bdf8" stroke-width="2.5" stroke-dasharray="4 3" />
+                <circle cx="153" cy="100" r="14" fill="#7c3aed" stroke="#f0abfc" stroke-width="2" />
+                <text x="153" y="104" fill="#ffffff" font-size="11" font-weight="800" text-anchor="middle">⚡</text>
+
+                <!-- Sağ Kart: Otomatik Eşleşen SD/Kalem Grupları -->
+                <rect x="170" y="38" width="84" height="56" rx="11" fill="rgba(59, 130, 246, 0.22)" stroke="#60a5fa" stroke-width="2" />
+                <text x="212" y="61" fill="#bfdbfe" font-size="9" font-weight="800" text-anchor="middle">SD: 60000180</text>
+                <text x="212" y="77" fill="#ffffff" font-size="8.5" font-weight="700" text-anchor="middle">Dry-Run ∩ FKT</text>
+
+                <rect x="170" y="106" width="84" height="56" rx="11" fill="rgba(16, 185, 129, 0.22)" stroke="#34d399" stroke-width="2" />
+                <text x="212" y="129" fill="#a7f3d0" font-size="9" font-weight="800" text-anchor="middle">SD: 60000195</text>
+                <text x="212" y="145" fill="#ffffff" font-size="8.5" font-weight="700" text-anchor="middle">Dry-Run ∩ SKT</text>
+              </svg>
+            </div>
+
+            <div class="blade-identity-block">
+              <div class="blade-kicker">MODÜL // ŞABLON İNDİR • DOLDUR • YÜKLE</div>
+              <h2 class="blade-title">Toplu Veri Girişi</h2>
+              <p class="blade-short-desc">
+                İçinde <strong>SD / Kalem açılır listeleri</strong> hazır olan örnek Excel'i indirip doldurun;
+                arka planda otomatik eşleştirip topluca kaydedin.
+              </p>
+            </div>
+
+            <!-- Canlı Telemetri Şeridi -->
+            <div class="blade-telemetry-row">
+              <div class="blade-stat-chip">
+                <span class="blade-stat-num">Data Validation</span>
+                <span class="blade-stat-lbl">Excel İçi SD/Kalem Seçimi</span>
+              </div>
+              <div class="blade-stat-chip">
+                <span class="blade-stat-num">Otomatik VLOOKUP</span>
+                <span class="blade-stat-lbl">Arka Plan Bakiye Eşleştirme</span>
+              </div>
+            </div>
+
+            <!-- Üzerine Gelindiğinde (Hover) Açılan Dövüşçü Yetenek/Özellik Listesi -->
+            <div class="blade-hover-drawer">
+              <ul class="blade-skill-list">
+                <li><span class="li-ico">📥</span><span><code>teslimat_md.bakiye_siparis</code> verileri gömülü 2 sayfalı akıllı <code>.xlsx</code> şablonu</span></li>
+                <li><span class="li-ico">📋</span><span>Hem tekli sipariş kalemi hem de çoklu proje/kalem uygunsuzluk girişi için ideal</span></li>
+                <li><span class="li-ico">🔄</span><span>Yüklenen satırları arka planda SD/Kalem bazında gruplayıp Venn kümesi hesaplama</span></li>
+                <li><span class="li-ico">🚀</span><span>Tüm grupları tek tıkla veritabanına toplu kaydetme veya VennFlow'da açma</span></li>
+              </ul>
+
+              <div class="blade-cta-group cta-row-dual">
+                <button type="button" class="blade-select-btn primary-purple" id="btnHeroGoBulk">
+                  <span>📦 TOPLU GİRİŞİ SEÇ</span>
+                  <span class="cta-arrow">→</span>
+                </button>
+                <button type="button" class="blade-sub-btn" id="btnPortalQuickDownloadTpl" title="Doğrudan Örnek Akıllı Excel Şablonunu İndir (.xlsx)">
+                  📥 Örnek Excel İndir (.xlsx)
+                </button>
+                <button type="button" id="btnCardGoBulk" style="display:none;" aria-hidden="true"></button>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================================================================
+             PANEL 03: KPI KAYITLARI MERKEZİ (POSTGRESQL POP-UP & ANALİTİK)
+             ================================================================ -->
+        <article class="fighter-blade blade-kpi" id="cardModuleKpiPopup" data-target-action="kpi-popup" tabindex="0">
+          <div class="blade-ambient-glow"></div>
+          <div class="blade-grid-pattern"></div>
+
+          <div class="fighter-blade-inner">
+            <div class="blade-top-meta">
+              <span class="blade-index-num">03</span>
+              <span class="blade-class-badge">CANLI POSTGRESQL KPI MERKEZİ</span>
+            </div>
+
+            <!-- Görsel Amblem: Veritabanı & KPI Radar -->
+            <div class="blade-emblem-stage">
+              <svg class="blade-svg-art" viewBox="0 0 280 200" fill="none">
+                <!-- Silindirik Veritabanı Katmanları -->
+                <ellipse cx="140" cy="52" rx="74" ry="20" fill="rgba(16, 185, 129, 0.30)" stroke="#34d399" stroke-width="2.2" />
+                <path d="M66 52 V88 C66 99, 199 99, 214 88 V52" fill="rgba(16, 185, 129, 0.16)" stroke="#34d399" stroke-width="2.2" />
+                <path d="M66 92 V128 C66 139, 199 139, 214 128 V92" fill="rgba(6, 182, 212, 0.16)" stroke="#22d3ee" stroke-width="2.2" />
+                <path d="M66 132 V162 C66 173, 199 173, 214 162 V132" fill="rgba(59, 130, 246, 0.16)" stroke="#60a5fa" stroke-width="2.2" />
+                <!-- Katman Etiketleri -->
+                <text x="140" y="56" fill="#ecfdf5" font-size="9.5" font-weight="800" text-anchor="middle">teslimat_md.dryrun_fkt_skt_kpi</text>
+                <text x="140" y="81" fill="#a7f3d0" font-size="9" font-weight="700" text-anchor="middle">Proje • SD • Kalem • Ürün Kısa Metni</text>
+                <text x="140" y="121" fill="#a5f3fc" font-size="9" font-weight="700" text-anchor="middle">Dry-Run ∩ FKT / SKT JSON Kayıtları</text>
+                <text x="140" y="156" fill="#bfdbfe" font-size="9" font-weight="700" text-anchor="middle">Çoklu Filtreleme &amp; Admin Denetimi</text>
+              </svg>
+            </div>
+
+            <div class="blade-identity-block">
+              <div class="blade-kicker">MODÜL // VERİTABANI POP-UP &amp; DENETİM</div>
+              <h2 class="blade-title">KPI Kayıtları</h2>
+              <p class="blade-short-desc">
+                Kaydedilen tüm <strong>Dry-Run / FKT / SKT</strong> KPI analizlerini geniş Pop-Up ekranda filtreleyin,
+                JSON uygunsuzluk detaylarına erişin.
+              </p>
+            </div>
+
+            <!-- Canlı Telemetri Şeridi -->
+            <div class="blade-telemetry-row">
+              <div class="blade-stat-chip">
+                <span class="blade-stat-num" id="homeStatKpiCount">0</span>
+                <span class="blade-stat-lbl">Kayıtlı KPI Analizi</span>
+              </div>
+              <div class="blade-stat-chip">
+                <span class="blade-stat-num" id="homeStatCommon">0</span>
+                <span class="blade-stat-lbl">Ortak Tekrarlayan Bulgu</span>
+              </div>
+            </div>
+
+            <!-- Üzerine Gelindiğinde (Hover) Açılan Dövüşçü Yetenek/Özellik Listesi -->
+            <div class="blade-hover-drawer">
+              <ul class="blade-skill-list">
+                <li><span class="li-ico">🖥️</span><span>Tam ekran Pop-Up penceresinde <code>dryrun_fkt_skt_kpi</code> kayıtlarını inceleme</span></li>
+                <li><span class="li-ico">🔍</span><span>Proje Adı, SD, Kalem, 2. Faaliyet Türü ve Ürün Kısa Metnine göre anlık filtreleme</span></li>
+                <li><span class="li-ico">{ }</span><span>Ortak ve benzersiz uygunsuzlukların JSON dökümünü tek tıkla görüntüleme</span></li>
+                <li><span class="li-ico">🛡️</span><span>Admin (Yönetici) yetkisine sahip kullanıcılar için kayıt silme ve temizlik</span></li>
+              </ul>
+
+              <div class="blade-cta-group">
+                <button type="button" class="blade-select-btn primary-emerald" id="btnHeroOpenKpiPopup">
+                  <span>🗄️ KPI TABLOSUNU AÇ (POP-UP)</span>
+                  <span class="cta-arrow">↗</span>
+                </button>
+                <button type="button" id="btnCardOpenKpiPopup" style="display:none;" aria-hidden="true"></button>
+              </div>
+            </div>
+          </div>
+        </article>
+
+      </div>
+    </div>
+
+    <!-- Ortak Motor & Benzerlik Eşiği Yapılandırma Çubuğu (VennFlow ve Toplu Giriş Sekmelerinde Görünür) -->
     <!-- Engine & Mode Config Card -->
-    <section class="config-bar-section">
+    <section class="config-bar-section" id="sharedConfigBarSection" style="display: none;">
       <div class="config-bar-card">
         <!-- Engine Selector -->
         <div class="engine-selector-group">
@@ -76,11 +415,15 @@
           <div class="segmented-control" id="engineSegmentedControl">
             <button class="segment-btn active" data-engine="local" id="btnEngineLocal">
               <span class="engine-icon">⚡</span>
-              <span>Yerel ML (Çevrimdışı Mesafe)</span>
+              <span>Yerel ML (Mesafe)</span>
+            </button>
+            <button class="segment-btn" data-engine="embedding" id="btnEngineEmbedding">
+              <span class="engine-icon">🧬</span>
+              <span>Vektör Embedding</span>
             </button>
             <button class="segment-btn" data-engine="aselix" id="btnEngineAselix">
               <span class="engine-icon">🤖</span>
-              <span>AselixAI API + Kök Neden Analizi</span>
+              <span>AselixAI API + Kök Neden</span>
             </button>
           </div>
         </div>
@@ -101,20 +444,25 @@
           </div>
         </div>
 
-        <!-- Selected Model Pill -->
-        <div class="active-model-pill" id="activeModelPill">
-          <span class="model-tag">Model:</span>
-          <span class="model-name" id="currentModelDisplay">aselix-llm-v1</span>
-        </div>
+        <!-- Model and Batch Info Pills (Yalnızca Admin) -->
+        <div class="config-pills-group admin-only-item" id="configPillsGroup" style="display: none;">
+          <div class="active-model-pill" id="activeModelPill">
+            <span class="model-tag">Model:</span>
+            <span class="model-name" id="currentModelDisplay">aselix-llm-v1</span>
+          </div>
 
-        <!-- 1-Min Timeout & Batch Indicator Pill -->
-        <div class="active-model-pill" id="batchProtectionPill" title="1 dakikalık zaman aşımı koruması devrede. Talepler 15'erli batchler halinde iletilir.">
-          <span class="model-tag">⏱️ İstek Koruması:</span>
-          <span class="model-name" id="batchSizeDisplay">Batch &lt; 1 Dk</span>
+          <div class="active-model-pill" id="batchProtectionPill" title="1 dakikalık zaman aşımı koruması devrede. Talepler 15'erli batchler halinde iletilir.">
+            <span class="model-tag">⏱️ İstek Koruması:</span>
+            <span class="model-name" id="batchSizeDisplay">Batch &lt; 1 Dk</span>
+          </div>
         </div>
       </div>
     </section>
 
+    <!-- ======================================================================
+         SEKME 2: VENNFLOW (TEKLİ İKİ EXCEL / METİN KIYASLAMA)
+         ====================================================================== -->
+    <div id="pageViewVennflow" class="page-tab-view" style="display: none;">
     <!-- Step 1: Input Tabs & Data Entry -->
     <section class="upload-section">
       <div class="section-heading">
@@ -149,6 +497,65 @@
         <div class="dropzone-grid">
           <!-- Dropzone 1 -->
           <div class="dropzone-column">
+            <!-- UGESUDKOKPİT Bakiye Sipariş & Faz Seçim Paneli (1. Belge) -->
+            <div class="bakiye-context-card bakiye-card-a" id="bakiyeCard1">
+              <div class="bakiye-card-header">
+                <div class="bakiye-card-title">
+                  <span class="bakiye-title-badge badge-blue">1. Excel Bağlamı</span>
+                  <span>Proje / SD-Kalem &amp; Test Fazı</span>
+                </div>
+                <span class="bakiye-db-pill" id="bakiyeDbSource1" title="Veri Kaynağı: ud_kokpit -> teslimat_md.bakiye_siparis">
+                  🗄️ teslimat_md.bakiye_siparis
+                </span>
+              </div>
+
+              <div class="bakiye-selectors-grid">
+                <div class="bakiye-field">
+                  <label for="bakiyeProjeSelect1">Proje Filtresi:</label>
+                  <select id="bakiyeProjeSelect1" class="form-select bakiye-select">
+                    <option value="">Tüm Projeler (Yükleniyor...)</option>
+                  </select>
+                </div>
+                <div class="bakiye-field">
+                  <label for="bakiyeSearchInput1">SD / Kalem / Ürün Ara:</label>
+                  <input type="text" id="bakiyeSearchInput1" class="form-input bakiye-search-input" placeholder="Örn: 987654, Kalem 2, Malzeme...">
+                </div>
+              </div>
+
+              <div class="bakiye-field" style="margin-top: 8px;">
+                <label for="bakiyeItemSelect1">İlgili Sipariş Kalemi (Proje • SD / Kalem • Ürün Kısa Metni):</label>
+                <select id="bakiyeItemSelect1" class="form-select bakiye-select">
+                  <option value="">Veritabanından kayıt seçin...</option>
+                </select>
+              </div>
+
+              <!-- Ekranda Seçili Proje, SD, Kalem ve Ürün Kısa Metni Bilgisi Gösterimi -->
+              <div class="bakiye-selected-info" id="bakiyeInfoBox1">
+                <div class="bakiye-info-item">
+                  <span class="bakiye-info-label">Proje İsmi</span>
+                  <span class="bakiye-info-value" id="infoProje1">-</span>
+                </div>
+                <div class="bakiye-info-item">
+                  <span class="bakiye-info-label">SD / Kalem</span>
+                  <span class="bakiye-info-value mono" id="infoSdKalem1">- / -</span>
+                </div>
+                <div class="bakiye-info-item bakiye-info-wide">
+                  <span class="bakiye-info-label">Ürün Kısa Metni</span>
+                  <span class="bakiye-info-value" id="infoUrun1">-</span>
+                </div>
+              </div>
+
+              <!-- 1. Faaliyetin Türü: Her Zaman Dry-Run (Sabit) -->
+              <div class="bakiye-phase-bar">
+                <span class="bakiye-phase-label">1. Faaliyetin Türü (Sabit):</span>
+                <div class="phase-segmented" id="phaseGroup1" role="group" aria-label="1. Excel Faz Seçimi (Sabit Dry-Run)">
+                  <button type="button" class="phase-btn active locked-phase" data-doc="1" data-phase="Dry-Run" title="İlk faaliyet her zaman Dry-Run olarak sabitlenmiştir">
+                    🔒 Dry-Run (1. Faaliyet)
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <div class="dropzone-card" id="dropzone1">
               <input type="file" id="fileInput1" accept=".xlsx,.xls,.xlsm" hidden>
               <div class="dropzone-content" id="dropzoneContent1">
@@ -161,7 +568,7 @@
                     <line x1="15" y1="15" x2="12" y2="12"></line>
                   </svg>
                 </div>
-                <div class="drop-badge badge-blue">1. Belge (Referans / Eski / Faz A)</div>
+                <div class="drop-badge badge-blue" id="dropBadge1">1. Belge (Referans / Eski / Dry-Run)</div>
                 <p class="drop-text">Excel dosyasını <strong>buraya sürükleyin</strong> veya tıklayın</p>
                 <span class="drop-hint">.xlsx, .xls</span>
               </div>
@@ -206,6 +613,64 @@
 
           <!-- Dropzone 2 -->
           <div class="dropzone-column">
+            <!-- UGESUDKOKPİT Bakiye Sipariş & Faz Seçim Paneli (2. Belge) -->
+            <div class="bakiye-context-card bakiye-card-b" id="bakiyeCard2">
+              <div class="bakiye-card-header">
+                <div class="bakiye-card-title">
+                  <span class="bakiye-title-badge badge-purple">2. Excel Bağlamı</span>
+                  <span>Proje / SD-Kalem &amp; Test Fazı</span>
+                </div>
+                <button type="button" class="btn-copy-bakiye" id="btnCopyBakiye1To2" title="1. Excel için seçilen Proje ve SD/Kalem bilgisini 2. Excel'e kopyala">
+                  🔗 1. Seçimi Kopyala
+                </button>
+              </div>
+
+              <div class="bakiye-selectors-grid">
+                <div class="bakiye-field">
+                  <label for="bakiyeProjeSelect2">Proje Filtresi:</label>
+                  <select id="bakiyeProjeSelect2" class="form-select bakiye-select">
+                    <option value="">Tüm Projeler (Yükleniyor...)</option>
+                  </select>
+                </div>
+                <div class="bakiye-field">
+                  <label for="bakiyeSearchInput2">SD / Kalem / Ürün Ara:</label>
+                  <input type="text" id="bakiyeSearchInput2" class="form-input bakiye-search-input" placeholder="Örn: 987654, Kalem 2, Malzeme...">
+                </div>
+              </div>
+
+              <div class="bakiye-field" style="margin-top: 8px;">
+                <label for="bakiyeItemSelect2">İlgili Sipariş Kalemi (Proje • SD / Kalem • Ürün Kısa Metni):</label>
+                <select id="bakiyeItemSelect2" class="form-select bakiye-select">
+                  <option value="">Veritabanından kayıt seçin...</option>
+                </select>
+              </div>
+
+              <!-- Ekranda Seçili Proje, SD, Kalem ve Ürün Kısa Metni Bilgisi Gösterimi -->
+              <div class="bakiye-selected-info" id="bakiyeInfoBox2">
+                <div class="bakiye-info-item">
+                  <span class="bakiye-info-label">Proje İsmi</span>
+                  <span class="bakiye-info-value" id="infoProje2">-</span>
+                </div>
+                <div class="bakiye-info-item">
+                  <span class="bakiye-info-label">SD / Kalem</span>
+                  <span class="bakiye-info-value mono" id="infoSdKalem2">- / -</span>
+                </div>
+                <div class="bakiye-info-item bakiye-info-wide">
+                  <span class="bakiye-info-label">Ürün Kısa Metni</span>
+                  <span class="bakiye-info-value" id="infoUrun2">-</span>
+                </div>
+              </div>
+
+              <!-- 2. Faaliyetin Türü Seçimi (Yalnızca FKT veya SKT) -->
+              <div class="bakiye-phase-bar">
+                <span class="bakiye-phase-label">2. Faaliyetin Türü:</span>
+                <div class="phase-segmented" id="phaseGroup2" role="group" aria-label="2. Excel Faz Seçimi (FKT veya SKT)">
+                  <button type="button" class="phase-btn active" data-doc="2" data-phase="FKT">FKT</button>
+                  <button type="button" class="phase-btn" data-doc="2" data-phase="SKT">SKT</button>
+                </div>
+              </div>
+            </div>
+
             <div class="dropzone-card" id="dropzone2">
               <input type="file" id="fileInput2" accept=".xlsx,.xls,.xlsm" hidden>
               <div class="dropzone-content" id="dropzoneContent2">
@@ -218,7 +683,7 @@
                     <line x1="15" y1="15" x2="12" y2="12"></line>
                   </svg>
                 </div>
-                <div class="drop-badge badge-purple">2. Belge (Kıyaslanan / Yeni / Faz B)</div>
+                <div class="drop-badge badge-purple" id="dropBadge2">2. Belge (Kıyaslanan / Yeni / FKT)</div>
                 <p class="drop-text">Excel dosyasını <strong>buraya sürükleyin</strong> veya tıklayın</p>
                 <span class="drop-hint">.xlsx, .xls</span>
               </div>
@@ -333,6 +798,9 @@
         </div>
       </div>
 
+      <!-- Kıyaslanan Belgelerin Proje / SD-Kalem / Ürün / Faz Künyesi -->
+      <div class="comparison-meta-banner" id="comparisonMetaBanner" style="display: none;"></div>
+
       <!-- Executive Summary Card -->
       <div class="summary-card" id="summaryCard">
         <div class="summary-card-header">
@@ -435,6 +903,9 @@
             <button class="filter-tab-btn tab-b" data-filter="only_b" id="tabFilterB">
               Yalnızca 2. Belge (<span id="countB">0</span>)
             </button>
+            <button class="filter-tab-btn tab-declined" data-filter="declined" id="tabFilterDeclined" style="display: none;">
+              Reddedilen Benzerlikler (<span id="countDeclined">0</span>)
+            </button>
           </div>
 
           <div class="table-actions">
@@ -459,15 +930,72 @@
             <thead>
               <tr>
                 <th style="width: 50px;">#</th>
-                <th>1. Belge / Veri Kaydı</th>
+                <th>1. Belge (Dry-Run) / Veri Kaydı</th>
                 <th>2. Belge Eşleşen Karşılığı</th>
                 <th style="width: 170px;">Benzerlik / Durum</th>
+                <th style="width: 225px; text-align: right;">Benzerlik Kararı / İşlem</th>
+              </tr>
+              <tr class="table-column-filters-row">
+                <th style="text-align: center;">
+                  <button type="button" class="btn-clear-col-filters" id="btnClearDetailColFilters" title="Sütun filtrelerini sıfırla">✕</button>
+                </th>
+                <th>
+                  <input type="text" id="colFilterDoc1" class="table-col-filter-input" placeholder="🔍 1. Belge sütununda filtrele...">
+                </th>
+                <th>
+                  <input type="text" id="colFilterDoc2" class="table-col-filter-input" placeholder="🔍 2. Belge sütununda filtrele...">
+                </th>
+                <th>
+                  <select id="colFilterStatus" class="table-col-filter-select">
+                    <option value="all">Tüm Durumlar</option>
+                    <option value="exact">✓ %100 Tam Eşleşme</option>
+                    <option value="fuzzy">≈ Kısmi Benzer (&lt;%100)</option>
+                    <option value="only_a">🔵 Yalnızca 1. Belge</option>
+                    <option value="only_b">🟣 Yalnızca 2. Belge</option>
+                  </select>
+                </th>
+                <th style="text-align: right;">
+                  <span id="detailFilteredCountBadge" class="col-filter-count-badge">0 kayıt</span>
+                </th>
               </tr>
             </thead>
             <tbody id="detailsTableBody">
               <!-- Dynamically populated rows -->
             </tbody>
           </table>
+        </div>
+
+        <!-- Tablo Sonu: Mevcut Verileri Veritabanına Aktar (teslimat_md.dryrun_fkt_skt_kpi) -->
+        <div class="db-kpi-export-footer" id="dbKpiExportFooter">
+          <div class="db-kpi-footer-top">
+            <div class="db-kpi-footer-info">
+              <div class="db-kpi-title-row">
+                <span class="db-kpi-icon">🗄️</span>
+                <h4>PostgreSQL Veritabanı Aktarımı (<code>teslimat_md.dryrun_fkt_skt_kpi</code>)</h4>
+              </div>
+              <p class="db-kpi-sub">
+                Tablodaki onaylanmış ortak ve benzersiz uygunsuzluk sayılarını ve ayrı ayrı JSON listelerini
+                <strong>Proje Adı • SD • Kalem • 1. Faaliyet (Dry-Run) • 2. Faaliyet • Ürün Kısa Metni</strong> anahtarıyla kaydeder.
+              </p>
+            </div>
+
+            <div class="db-kpi-footer-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btnToggleKpiRecords" title="Veritabanındaki mevcut dryrun_fkt_skt_kpi kayıtlarını büyük Pop-Up pencerede görüntüle ve filtrele">
+                📋 Tablodaki Kayıtları Göster (Pop-Up)
+              </button>
+              <button type="button" class="btn btn-primary btn-lg pulse-glow" id="btnSaveToKpiDb">
+                💾 Mevcut Verileri Veritabanına Aktar
+              </button>
+            </div>
+          </div>
+
+          <!-- Canlı Anahtar & KPI Özet önizleme şeridi -->
+          <div class="db-kpi-preview-strip" id="dbKpiPreviewStrip">
+            <!-- JS ile canlı doldurulur -->
+          </div>
+
+          <!-- Kayıt Durum Bildirimi -->
+          <div class="db-kpi-status-msg" id="kpiSaveStatusBanner" style="display: none;"></div>
         </div>
       </div>
     </section>
@@ -539,7 +1067,308 @@
         </div>
       </div>
     </section>
+    </div> <!-- /#pageViewVennflow -->
+
+    <!-- ======================================================================
+         SEKME 3: TOPLU VERİ GİRİŞİ (ŞABLON EXCEL İNDİR / DOLDUR / YÜKLE)
+         ====================================================================== -->
+    <div id="pageViewBulk" class="page-tab-view" style="display: none;">
+      <section class="upload-section">
+        <div class="section-heading">
+          <div class="step-num">1</div>
+          <div class="heading-content-row">
+            <div>
+              <h2>Şablon Excel İle Tekli / Toplu Veri Girişi ve SD/Kalem Eşleştirme</h2>
+              <p>
+                <code>teslimat_md.bakiye_siparis</code> verileriyle hazırlanmış açılır listeli örnek Excel şablonunu indirin,
+                SD/Kalem seçerek <strong>Dry-Run</strong> ve <strong>FKT / SKT</strong> uygunsuzluklarını doldurup yükleyin;
+                sistem arka planda SD/Kalem eşleştirmesini ve Venn kıyaslamasını otomatik yapar.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3 Adımlı Görsel İş Akışı Şeridi -->
+        <div class="bulk-stepper-strip">
+          <div class="bulk-stepper-item active-step">
+            <div class="bulk-stepper-circle">1</div>
+            <div class="bulk-stepper-text">
+              <strong>Örnek Akıllı Excel'i İndir</strong>
+              <span><code>bakiye_siparis</code> açılır listeli (Dropdown) <code>.xlsx</code> şablonu</span>
+            </div>
+          </div>
+          <div class="bulk-stepper-arrow">➔</div>
+          <div class="bulk-stepper-item active-step">
+            <div class="bulk-stepper-circle">2</div>
+            <div class="bulk-stepper-text">
+              <strong>SD / Kalem Seç &amp; Doldur</strong>
+              <span>Tekli veya toplu olarak <strong>Dry-Run</strong> ve <strong>FKT / SKT</strong> satırlarını gir</span>
+            </div>
+          </div>
+          <div class="bulk-stepper-arrow">➔</div>
+          <div class="bulk-stepper-item active-step">
+            <div class="bulk-stepper-circle">3</div>
+            <div class="bulk-stepper-text">
+              <strong>Yükle &amp; Otomatik Eşleştir</strong>
+              <span>Arka planda Venn küme hesabı ve <code>dryrun_fkt_skt_kpi</code> kaydı</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="dropzone-grid">
+          <!-- SOL SÜTUN: 1. Adım - Örnek Excel Şablonunu İndir -->
+          <div class="dropzone-column">
+            <div class="bakiye-context-card bakiye-card-a bulk-equal-card">
+              <div class="bakiye-card-header">
+                <div class="bakiye-card-title">
+                  <span class="bakiye-title-badge badge-blue">ADIM 1 • ŞABLON EXCEL</span>
+                  <span>Açılır Listeli (Data Validation) .xlsx</span>
+                </div>
+                <span class="bakiye-db-pill" title="Veri Kaynağı: ud_kokpit -> teslimat_md.bakiye_siparis">
+                  🗄️ teslimat_md.bakiye_siparis
+                </span>
+              </div>
+
+              <p class="bulk-card-lead">
+                İndireceğiniz Excel dosyasında <strong>SD</strong> ve <strong>Kalem</strong> sütunlarını seçtiğinizde veya yazdığınızda;
+                diğer tüm proje alanları (<strong>Proje Adı, Ürün Kısa Metni, Malzeme / UGES Tanım</strong>) Excel içinde ve yükleme sırasında
+                <strong>otomatik olarak dolar</strong>.
+              </p>
+
+              <div class="bakiye-field" style="margin-top: 4px;">
+                <label for="bulkTemplateProjeSelect">Şablona Dahil Edilecek Proje (İsteğe Bağlı Filtre):</label>
+                <select id="bulkTemplateProjeSelect" class="form-select bakiye-select">
+                  <option value="ALL">Tüm Projeler (Bakiye Sipariş Tam Liste)</option>
+                </select>
+              </div>
+
+              <!-- Görsel Excel Sütun Yapısı Önizleme Kartı -->
+              <div class="excel-schema-preview-box">
+                <div class="excel-schema-header">
+                  <span>📊 İndirilecek Excel Şablonu Sütun Yapısı</span>
+                  <span class="excel-sheet-pill">Sayfa 1: Uygunsuzluk_Veri_Girisi</span>
+                </div>
+                <div class="excel-schema-grid">
+                  <div class="excel-col-chip selectable">
+                    <span class="col-letter">SÜTUN A &amp; B • ANAHTAR</span>
+                    <strong>SD &amp; Kalem <em>▼ Seçin / Yazın</em></strong>
+                    <small>SD ve Kalem girilince diğer sütunlar otomatik dolar</small>
+                  </div>
+                  <div class="excel-col-chip selectable-purple">
+                    <span class="col-letter">SÜTUN C • SEÇİLEBİLİR</span>
+                    <strong>Faaliyet_Turu <em>▼ Dropdown</em></strong>
+                    <small>Dry-Run, FKT veya SKT seçimi</small>
+                  </div>
+                  <div class="excel-col-chip text-col">
+                    <span class="col-letter">SÜTUN D • METİN GİRİŞİ</span>
+                    <strong>Uygunsuzluk_Aciklamasi</strong>
+                    <small>Tespit edilen bulgu / uygunsuzluk metni</small>
+                  </div>
+                  <div class="excel-col-chip auto-col">
+                    <span class="col-letter">SÜTUN E-G • OTOMATİK DOLAR (VLOOKUP)</span>
+                    <strong>Proje_Adi • Urun_Kisa_Metni • Malzeme</strong>
+                    <small>SD ve Kalem sütunlarına göre otomatik gelir</small>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bulk-download-cta-wrap">
+                <button type="button" class="btn btn-primary btn-lg pulse-glow" id="btnDownloadBulkTemplate" style="width: 100%; justify-content: center;">
+                  📥 Örnek Akıllı Excel Şablonunu İndir (.xlsx)
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ORTA İKON -->
+          <div class="vs-divider">
+            <span>➔</span>
+          </div>
+
+          <!-- SAĞ SÜTUN: 2. Adım - Doldurulan Excel'i Yükle & Eşleştir -->
+          <div class="dropzone-column">
+            <div class="bakiye-context-card bakiye-card-b">
+              <div class="bakiye-card-header">
+                <div class="bakiye-card-title">
+                  <span class="bakiye-title-badge badge-purple">ADIM 2 • ŞABLONU YÜKLE</span>
+                  <span>Otomatik SD/Kalem &amp; Venn Analizi</span>
+                </div>
+                <span class="bakiye-db-pill" style="background: var(--color-purple-subtle); color: var(--color-purple); border-color: rgba(124, 58, 237, 0.3);">
+                  ⚡ Arka Plan Eşleştirme
+                </span>
+              </div>
+
+              <div class="bakiye-field" style="margin-top: 2px;">
+                <label for="bulkFallbackBakiyeSelect">Varsayılan SD / Kalem (Excel'de boş bırakılmış satırlar için opsiyonel yedek):</label>
+                <select id="bulkFallbackBakiyeSelect" class="form-select bakiye-select">
+                  <option value="">-- Excel İçindeki SD / Kalem Sütununu Kullan (Otomatik) --</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="dropzone-card" id="bulkDropzone">
+              <input type="file" id="bulkFileInput" accept=".xlsx,.xls,.xlsm" hidden>
+              <div class="dropzone-content" id="bulkDropzoneContent">
+                <div class="drop-icon file-b">
+                  <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                  </svg>
+                </div>
+                <div class="drop-badge badge-purple">Doldurulmuş Şablon Excel (.xlsx)</div>
+                <p class="drop-text">Doldurduğunuz şablonu <strong>buraya sürükleyin</strong> veya tıklayın</p>
+                <span class="drop-hint">VennFlow_Toplu_Veri_Girisi_Sablonu.xlsx • Tekli veya Çoklu SD/Kalem destekler</span>
+              </div>
+
+              <div class="file-loaded-view" id="bulkFileView" style="display: none;">
+                <div class="file-meta">
+                  <span class="file-ext">XLSX</span>
+                  <div>
+                    <h4 class="file-name" id="bulkFileName">VennFlow_Uygunsuzluk_Sablonu.xlsx</h4>
+                    <p class="file-sub" id="bulkFileSub">Hazır</p>
+                  </div>
+                </div>
+                <button class="btn-remove" id="btnRemoveBulkFile" title="Dosyayı Kaldır">&times;</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Toplu Analiz Çalıştırma Çubuğu -->
+        <div class="action-bar">
+          <div class="action-left">
+            <span class="action-hint">💡 İndirdiğiniz şablonu hiç değiştirmeden de yükleyip örnek SD/Kalem eşleştirmesini hemen test edebilirsiniz.</span>
+          </div>
+          <button type="button" class="btn btn-primary btn-lg pulse-glow" id="btnRunBulkAnalysis">
+            🚀 Şablonu Analiz Et &amp; SD/Kalem Eşleştir
+          </button>
+        </div>
+      </section>
+
+      <!-- Toplu Analiz Sonuçları ve Veritabanına Aktarım Bölümü -->
+      <section id="bulkResultsSection" style="display: none; margin-top: 24px;">
+        <div class="section-heading">
+          <div class="step-num">2</div>
+          <div class="heading-content-row">
+            <div>
+              <h2>Eşleşen SD / Kalem Grupları ve Venn Kıyaslama Sonuçları</h2>
+              <p id="bulkResultsSubtitle">
+                Arka planda <code>teslimat_md.bakiye_siparis</code> ile eşleştirilen gruplar aşağıda listelenmiştir.
+                Benzer olmayan eşleşmeleri reddedebilir veya tek tıkla veritabanına aktarabilirsiniz.
+              </p>
+            </div>
+            <div>
+              <button type="button" class="btn btn-primary btn-lg pulse-glow" id="btnSaveAllBulkGroups">
+                💾 Tüm Grupları Veritabanına Aktar (<code>dryrun_fkt_skt_kpi</code>)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="db-kpi-status-msg" id="bulkSaveStatusBanner" style="display: none; margin-bottom: 16px;"></div>
+
+        <!-- Toplu Gruplar Konteyneri -->
+        <div id="bulkGroupsContainer" class="bulk-groups-container">
+          <!-- JS ile doldurulur -->
+        </div>
+      </section>
+    </div> <!-- /#pageViewBulk -->
   </main>
+
+  <!-- ========================================================================
+       BÜYÜK POP-UP MODAL: KPI KAYITLARI TABLOSU (teslimat_md.dryrun_fkt_skt_kpi)
+       ======================================================================== -->
+  <div class="modal-backdrop kpi-popup-backdrop" id="kpiRecordsModal" style="display: none;">
+    <div class="modal-card kpi-popup-card">
+      <div class="modal-header kpi-popup-header">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <span style="font-size: 22px;">🗄️</span>
+          <div>
+            <h3 style="margin: 0;">PostgreSQL KPI Kayıtları Tablosu (<code>teslimat_md.dryrun_fkt_skt_kpi</code>)</h3>
+            <p style="margin: 2px 0 0; font-size: 12px; color: var(--text-muted);">
+              Proje Adı • SD • Kalem • 1. Faaliyet (Dry-Run) • 2. Faaliyet (FKT/SKT) • Ürün Kısa Metni bazlı uygunsuzluk KPI kayıtları
+            </p>
+          </div>
+          <span class="badge-accent" id="kpiRecordsCountBadge">0 Kayıt</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button type="button" class="btn btn-secondary btn-sm" id="btnClearKpiFilters" title="Tüm tablo filtrelerini sıfırla">🧹 Filtreleri Temizle</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshKpiRecords">🔄 Yenile</button>
+          <button type="button" class="btn-close" id="btnCloseKpiModal" title="Pencereyi Kapat">&times;</button>
+        </div>
+      </div>
+
+      <div class="modal-body kpi-popup-body">
+        <!-- Çoklu Sütun Filtreleme Çubuğu -->
+        <div class="kpi-filter-bar" id="kpiFilterBar">
+          <div class="kpi-filter-item">
+            <label for="kpiFilterProje">Proje Adı:</label>
+            <select id="kpiFilterProje" class="table-col-filter-select">
+              <option value="ALL">Tüm Projeler</option>
+            </select>
+          </div>
+          <div class="kpi-filter-item">
+            <label for="kpiFilterSd">SD No:</label>
+            <input type="text" id="kpiFilterSd" class="table-col-filter-input" placeholder="Örn: 60000180">
+          </div>
+          <div class="kpi-filter-item">
+            <label for="kpiFilterKalem">Kalem:</label>
+            <input type="text" id="kpiFilterKalem" class="table-col-filter-input" placeholder="Örn: 50">
+          </div>
+          <div class="kpi-filter-item">
+            <label for="kpiFilterFaaliyet2">2. Faaliyet Türü:</label>
+            <select id="kpiFilterFaaliyet2" class="table-col-filter-select">
+              <option value="ALL">Tümü (FKT + SKT)</option>
+              <option value="FKT">FKT</option>
+              <option value="SKT">SKT</option>
+            </select>
+          </div>
+          <div class="kpi-filter-item">
+            <label for="kpiFilterUrun">Ürün Kısa Metni:</label>
+            <input type="text" id="kpiFilterUrun" class="table-col-filter-input" placeholder="Ürün adı filtrele...">
+          </div>
+          <div class="kpi-filter-item" style="flex: 1.5;">
+            <label for="kpiFilterSearch">Genel / JSON Uygunsuzluk Arama:</label>
+            <input type="text" id="kpiFilterSearch" class="table-col-filter-input" placeholder="🔍 Uygunsuzluk metni veya kaydeden ara...">
+          </div>
+        </div>
+
+        <!-- Seçili Satır JSON Detay Paneli (Açılır/Kapanır) -->
+        <div id="kpiModalJsonPreviewBox" class="kpi-modal-json-box" style="display: none;">
+          <div class="kpi-modal-json-header">
+            <strong id="kpiModalJsonTitle">📄 Kayıt JSON Uygunsuzluk Detayları</strong>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnCloseKpiJsonPreview">✕ Detayı Kapat</button>
+          </div>
+          <pre id="kpiModalJsonContent" class="kpi-modal-json-pre"></pre>
+        </div>
+
+        <!-- Tablo Alanı -->
+        <div class="table-responsive kpi-popup-table-wrap">
+          <table class="data-table kpi-db-table">
+            <thead>
+              <tr>
+                <th>Proje Adı</th>
+                <th>SD / Kalem</th>
+                <th>1. Faaliyet</th>
+                <th>2. Faaliyet</th>
+                <th>Ürün Kısa Metni</th>
+                <th>1. Benzersiz (Dry-Run)</th>
+                <th>Ortak Uygunsuzluk</th>
+                <th>2. Benzersiz</th>
+                <th>Kaydeden / Tarih</th>
+                <th>JSON Detay</th>
+                <th class="admin-only-item" style="text-align: right;">İşlem (Admin)</th>
+              </tr>
+            </thead>
+            <tbody id="kpiSavedRecordsBody">
+              <tr><td colspan="11" style="text-align: center; padding: 20px;">Yükleniyor...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Settings Modal (Aselsan Endpoints, Models & API Key) -->
   <div class="modal-backdrop" id="settingsModal" style="display: none;">
@@ -626,6 +1455,12 @@
           <small class="form-help">API çağrılarının 1 dakikalık ağ zaman aşımına uğramaması için talepler bu boyutta parçalanarak iletilir.</small>
         </div>
 
+        <div class="form-group">
+          <label for="cfgEmbeddingModel">Vektör Embedding Modeli:</label>
+          <input type="text" id="cfgEmbeddingModel" class="form-input" value="text-embedding-3-small" placeholder="Örn: text-embedding-3-small, bge-m3, aselix-embed-v1">
+          <small class="form-help">Embedding modunda API /embeddings uç noktasına iletilecek model adı (Çevrimdışıysa yerel N-Gram vektör uzayı kullanılır).</small>
+        </div>
+
         <div id="testConnResult" style="display: none; padding: 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; margin-top: 10px;"></div>
       </div>
 
@@ -639,6 +1474,77 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=batch2"></script>
+  <!-- Kokpit SSO / Iframe Push & External Input Modal -->
+  <div class="modal-backdrop" id="identityModal" style="display: none;">
+    <div class="modal-card" style="max-width: 640px;">
+      <div class="modal-header">
+        <h3>🔐 Kokpit Kimlik Aktarımı (SSO) &amp; Dış Input Köprüsü</h3>
+        <button class="btn-close" id="btnCloseIdentity">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          Ana platform (Kokpit) içerisine <code>&lt;iframe&gt;</code> olarak gömüldüğünde <code>window.postMessage</code>
+          üzerinden gelen JWT Token, kullanıcı profili ve dışarıdan gönderilen input/embedding verileri burada görüntülenir.
+        </p>
+
+        <!-- Current User Profile Card -->
+        <div class="identity-profile-box" id="identityProfileBox">
+          <div class="identity-profile-header">
+            <div class="identity-avatar-lg" id="modalIdentityAvatar">🔐</div>
+            <div style="flex: 1;">
+              <h4 id="modalIdentityName">Oturum Bekleniyor...</h4>
+              <p id="modalIdentitySub" style="font-size: 12px; color: var(--text-muted);">
+                Kokpit <code>postMessage({ type: 'kokpit-identity' })</code> dinleniyor
+              </p>
+            </div>
+            <span class="badge-accent" id="modalIdentityBadge">Beklemede</span>
+          </div>
+          <div class="identity-grid" id="identityDetailsGrid">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+
+        <!-- Allowed Origins Config -->
+        <div class="form-group">
+          <label for="cfgAllowedOrigins">İzin Verilen Ana Sistem Origin'leri (ALLOWED_ORIGINS):</label>
+          <input type="text" id="cfgAllowedOrigins" class="form-input" value="http://localhost:3004, https://kokpit.sirketiniz.com, https://kokpit.aselsan.com.tr">
+          <small class="form-help">Virgülle ayrılmış güvenli origin listesi (<code>:3004</code> portlu adresler ve aynı origin otomatik kabul edilir).</small>
+        </div>
+
+        <!-- External Input & Kokpit PostMessage Simulator -->
+        <div class="form-group">
+          <div class="model-select-header" style="flex-wrap: wrap; gap: 6px;">
+            <label for="simPostMessagePayload">🧪 Dıştan Gelen Kimlik &amp; Input Paketi (Test / Simülasyon):</label>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <button class="btn btn-secondary btn-sm" id="btnFillStandardUserPayload" type="button" title="Standart Kullanıcı (User) rolü ile simüle et - Ayarlar ve LLM Suite detayları gizli">
+                👤 Standart Kullanıcı
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btnFillDefaultIdentityPayload" type="button" title="Yönetici (Admin) rolü ile simüle et - Ayarlar ve LLM Suite detayları açık">
+                🛡️ Yönetici (Admin)
+              </button>
+            </div>
+          </div>
+          <textarea id="simPostMessagePayload" class="form-input" rows="8" style="font-family: var(--font-mono); font-size: 11.5px; line-height: 1.4;"></textarea>
+          <small class="form-help">
+            Hem <code>user</code> ve <code>token</code> bilgilerini hem de <code>inputs</code> (metinler, hazır embedding vektörleri, model/eşik ayarları) alanlarını dışarıdan gönderebilirsiniz. <strong>Ayarlar</strong> ve <strong>LLM Suite teknik bilgileri</strong> yalnızca <code>role: "Admin"</code> kullanıcılarında görünür.
+          </small>
+        </div>
+
+        <div id="identityActionStatus" style="display: none; padding: 10px 12px; border-radius: 8px; font-size: 12.5px;"></div>
+      </div>
+
+      <div class="modal-footer" style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+        <button class="btn btn-secondary btn-sm" id="btnLogoutIdentity" type="button">🗑️ Oturumu Temizle</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary btn-sm" id="btnSimulatePostMessage" type="button">
+            🚀 postMessage Simüle Et (Kimlik + Input)
+          </button>
+          <button class="btn btn-primary btn-sm" id="btnSaveIdentityConfig" type="button">Kaydet &amp; Kapat</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=v10_home_bulk_popup"></script>
 </body>
 </html>
