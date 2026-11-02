@@ -1456,12 +1456,13 @@
         <div class="form-group">
           <label for="cfgBatchSize">API Kıyaslama Batch Boyutu:</label>
           <select id="cfgBatchSize" class="form-select">
-            <option value="8" selected>8 Kayıt / Batch (~6-12 sn - Önerilen &amp; Hızlı Yanıt)</option>
+            <option value="5" selected>5 Kayıt / Batch (~3-6 sn - Ultra Hızlı &amp; Odaklı Kümeleme)</option>
+            <option value="8">8 Kayıt / Batch (~6-12 sn - Önerilen)</option>
             <option value="10">10 Kayıt / Batch (~10-18 sn - Dengeli)</option>
             <option value="15">15 Kayıt / Batch (~18-35 sn)</option>
             <option value="20">20 Kayıt / Batch (~30-55 sn)</option>
           </select>
-          <small class="form-help">AselixAI'nin zaman aşımına uğramadan hızlı dönmesi için satırlar bu gruplarla parçalanır.</small>
+          <small class="form-help">Benzeyebilecek maddeler önceden tespit edilir ve seçilen boyutta (5, 8, 10, 15, 20) akıllı batch'lere bölünerek AI'ye gönderilir.</small>
         </div>
 
         <div class="form-group">

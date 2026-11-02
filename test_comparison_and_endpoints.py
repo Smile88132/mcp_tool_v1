@@ -751,7 +751,7 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
             self.assertEqual(data["durum"], "basarili")
             self.assertTrue(data["has_server_api_key"])
             self.assertEqual(data["default_timeout"], 90)
-            self.assertEqual(data["default_batch_size"], 8)
+            self.assertEqual(data["default_batch_size"], 5)
 
         # 2. /api/aselix/test-connection
         with mock.patch("app.fetch_aselix_models", return_value={"durum": "basarili", "base_url": "https://api.aselixai.aselsan.com.tr/v1", "aktif_ag": "milli", "modeller": ["aselix-llm-v1"]}):
@@ -762,6 +762,64 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
                 self.assertEqual(cdata["durum"], "basarili")
                 self.assertEqual(cdata["aktif_ag"], "milli")
                 self.assertIsNotNone(cdata["chat_ping"])
+
+    def test_strip_bakiye_metadata_from_text(self):
+        from app import strip_bakiye_metadata_from_text
+        # Pipe-delimited bakiye format
+        raw_1 = "987654 / 2 | Deneme Proje 1 | Malzeme2 | Pano içi etiketleme eksik"
+        cleaned_1 = strip_bakiye_metadata_from_text(raw_1)
+        self.assertEqual(cleaned_1, "Pano içi etiketleme eksik")
+
+        # Prefix format
+        raw_2 = "SD: 987654 Kalem: 2 Proje: Radar | Kablo kesiti standart dışı"
+        cleaned_2 = strip_bakiye_metadata_from_text(raw_2)
+        self.assertEqual(cleaned_2, "Kablo kesiti standart dışı")
+
+        # Clean text without bakiye
+        raw_3 = "Topraklama barası cıvatası gevşek"
+        cleaned_3 = strip_bakiye_metadata_from_text(raw_3)
+        self.assertEqual(cleaned_3, "Topraklama barası cıvatası gevşek")
+
+    def test_create_similarity_aware_batches(self):
+        from app import create_similarity_aware_batches
+        items_a = [
+            "Pano içi etiketleme eksik",
+            "Topraklama barası cıvatası gevşek",
+            "Hidrolik yağ sızıntısı mevcut",
+            "Pano kapağı kilit arızası",
+            "Kablo kanalı kapağı açık",
+            "Farklı başka bir problem A",
+            "Farklı başka bir problem B"
+        ]
+        items_b = [
+            "etiketleme eksik pano içi",
+            "cıvata gevşek topraklama barası",
+            "yağ kaçağı hidrolik sistem",
+            "yazılım derleme hatası"
+        ]
+        batches = create_similarity_aware_batches(items_a, items_b, batch_size=5)
+        self.assertGreaterEqual(len(batches), 2)
+        self.assertLessEqual(len(batches[0]["items_a"]), 5)
+        # En yüksek potansiyelli maddeler ilk batch'te toplanmalı
+        first_batch_texts = batches[0]["items_a"]
+        self.assertTrue(
+            "Pano içi etiketleme eksik" in first_batch_texts or
+            "Topraklama barası cıvatası gevşek" in first_batch_texts
+        )
+        self.assertIn("cluster_label", batches[0])
+
+    def test_api_compare_plan_batches_endpoint(self):
+        payload = {
+            "items_a": ["Hata 1", "Hata 2", "Hata 3", "Hata 4", "Hata 5", "Hata 6"],
+            "items_b": ["Hata 1", "Hata 2"],
+            "batch_size": 5
+        }
+        res = self.client.post("/api/compare/plan-batches", json=payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["durum"], "basarili")
+        self.assertEqual(data["batch_size"], 5)
+        self.assertEqual(len(data["batches"]), 2)
 
     def test_api_aselix_chat_multi_turn(self):
         with mock.patch("app.call_aselix_chat", return_value={"durum": "basarili", "cevap": "Sohbet cevabı", "aktif_ag": "milli"}):

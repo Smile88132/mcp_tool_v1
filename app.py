@@ -1306,6 +1306,151 @@ def extract_json_array_from_llm(text: str) -> List[Dict[str, Any]]:
     return results
 
 
+def strip_bakiye_metadata_from_text(text: Any) -> str:
+    """
+    Kullanıcı SD/Kalem veya bakiye sipariş sütunlarını seçtiyse veya metinde
+    proje/bakiye metaverileri varsa, yapay zekaya yalnızca saf uygunsuzluk metnini
+    iletmek için bu metaverileri temizler.
+    Örn: '987654 / 2 | Proje A | Malzeme B | Pano kapağı kırık' -> 'Pano kapağı kırık'
+    """
+    cleaned = clean_text_content(text)
+    if not cleaned:
+        return ""
+
+    if "|" in cleaned:
+        parts = [p.strip() for p in cleaned.split("|") if p.strip()]
+        if len(parts) >= 2:
+            non_bakiye_parts = []
+            for p in parts:
+                p_lower = p.lower()
+                is_sd_kalem = bool(
+                    re.search(r"^\d+\s*/\s*\d+$", p)
+                    or p_lower.startswith("sd:")
+                    or p_lower.startswith("kalem:")
+                    or p_lower.startswith("proje:")
+                )
+                if not is_sd_kalem:
+                    non_bakiye_parts.append(p)
+            if non_bakiye_parts:
+                return non_bakiye_parts[-1]
+
+    # 'SD: 123 Kalem: 2 ...' öneklerini kaldır
+    cleaned = re.sub(r"^(?:sd\s*[:\-]\s*\d+\s*)?(?:kalem\s*[:\-]\s*\d+\s*)?(?:proje\s*[:\-]\s*[^|;\-]+[|;\-])?", "", cleaned, flags=re.IGNORECASE).strip()
+    return cleaned
+
+
+def create_similarity_aware_batches(
+    items_a: List[str],
+    items_b: List[str],
+    batch_size: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Kıyaslanacak A ve B listelerini analiz ederek benzerlik potansiyeli yüksek
+    ve ortak B adaylarını hedefleyen maddeleri aynı batch içinde kümeleyen akıllı algoritma.
+    - Bakiye detaylarını soyar, yalnızca saf uygunsuzluk maddelerini işler.
+    - Karşılıklı benzerlik gösteren maddeler aynı batch'e (varsayılan: 5'erli) konur.
+    - Yüksek benzerlikli gruplar ilk sıralara alınarak eşleşmelerin hızlı ve tutarlı çözülmesi sağlanır.
+    """
+    clean_a = [strip_bakiye_metadata_from_text(x) for x in items_a if clean_text_content(x)]
+    clean_a = list(dict.fromkeys([x for x in clean_a if x]))
+    clean_b = [strip_bakiye_metadata_from_text(x) for x in items_b if clean_text_content(x)]
+    clean_b = list(dict.fromkeys([x for x in clean_b if x]))
+
+    if not clean_a:
+        return []
+
+    bs = max(1, min(batch_size, 50))
+
+    if not clean_b:
+        res = []
+        for i in range(0, len(clean_a), bs):
+            chunk = clean_a[i:i + bs]
+            res.append({
+                "batch_index": len(res) + 1,
+                "items_a": chunk,
+                "cluster_label": f"Grup {len(res) + 1} ({len(chunk)} Kayıt)",
+                "avg_potential": 0.0,
+                "recommended_candidates_b": []
+            })
+        return res
+
+    scored_a = []
+    for ia, a in enumerate(clean_a):
+        b_scores = []
+        for ib, b in enumerate(clean_b):
+            sim = calculate_text_similarity(a, b)
+            b_scores.append((sim, ib, b))
+        b_scores.sort(key=lambda x: x[0], reverse=True)
+        top_candidates = b_scores[:4]
+        max_s = top_candidates[0][0] if top_candidates else 0.0
+        top_b_indices = set(x[1] for x in top_candidates if x[0] > 0.2)
+        scored_a.append({
+            "idx": ia,
+            "text": a,
+            "max_sim": max_s,
+            "top_b_indices": top_b_indices,
+            "top_candidates": [x[2] for x in top_candidates]
+        })
+
+    # En yüksek eşleşme potansiyeline göre önceliklendir
+    scored_a.sort(key=lambda x: x["max_sim"], reverse=True)
+
+    unassigned = list(scored_a)
+    clusters = []
+
+    while unassigned:
+        seed = unassigned.pop(0)
+        current_cluster = [seed]
+        target_b = set(seed["top_b_indices"])
+
+        while len(current_cluster) < bs and unassigned:
+            best_idx = 0
+            best_score = -1.0
+            for i, cand in enumerate(unassigned):
+                overlap = len(target_b.intersection(cand["top_b_indices"]))
+                score = overlap * 2.0 + cand["max_sim"]
+                if score > best_score:
+                    best_score = score
+                    best_idx = i
+
+            picked = unassigned.pop(best_idx)
+            current_cluster.append(picked)
+            target_b.update(picked["top_b_indices"])
+
+        clusters.append(current_cluster)
+
+    batches = []
+    for idx, cl in enumerate(clusters):
+        items_in_cl = [x["text"] for x in cl]
+        avg_sim = round(sum(x["max_sim"] for x in cl) / len(cl), 3) if cl else 0.0
+        pct = round(avg_sim * 100)
+
+        if pct >= 70:
+            label = f"Yüksek Benzerlik Grubu (Ort. %{pct})"
+        elif pct >= 40:
+            label = f"Orta Benzerlik Grubu (Ort. %{pct})"
+        elif pct >= 20:
+            label = f"Düşük Benzerlik Grubu (Ort. %{pct})"
+        else:
+            label = f"Kalan Maddeler (Ort. %{pct})"
+
+        union_b = []
+        for x in cl:
+            for b_text in x["top_candidates"]:
+                if b_text not in union_b:
+                    union_b.append(b_text)
+
+        batches.append({
+            "batch_index": idx + 1,
+            "items_a": items_in_cl,
+            "cluster_label": label,
+            "avg_potential": avg_sim,
+            "recommended_candidates_b": union_b[:20]
+        })
+
+    return batches
+
+
 def shortlist_candidates_for_batch(
     items_a_batch: List[str],
     candidates_b: List[str],
@@ -1349,9 +1494,10 @@ def compare_items_with_aselix_batch(
     - Hata/zaman aşımı durumunda yerel ML ile emniyetli kurtarma (fallback).
     """
     t0 = time.time()
-    clean_batch = [clean_text_content(x) for x in (items_a_batch or []) if clean_text_content(x)]
-    clean_batch = list(dict.fromkeys(clean_batch))
-    clean_cands = [clean_text_content(b) for b in (candidates_b or []) if clean_text_content(b)]
+    clean_batch = [strip_bakiye_metadata_from_text(x) for x in (items_a_batch or []) if clean_text_content(x)]
+    clean_batch = list(dict.fromkeys([x for x in clean_batch if x]))
+    clean_cands = [strip_bakiye_metadata_from_text(b) for b in (candidates_b or []) if clean_text_content(b)]
+    clean_cands = list(dict.fromkeys([b for b in clean_cands if b]))
 
     eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(base_url, api_key, model, timeout)
 
@@ -1392,9 +1538,9 @@ def compare_items_with_aselix_batch(
     list_b_text = "\n".join([f"B{j+1}. {cand}" for j, cand in enumerate(shortlist)])
 
     system_prompt = (
-        "Sen ASELSAN Sistem ve Kalite Güvence mühendisliği uzmanı bir analiz asistanısın. "
-        "İki listedeki uygunsuzluk maddelerini karşılaştırıp anlamsal olarak AYNI teknik problemi ifade edenleri eşleştirirsin. "
-        "Farklı kelimeler/eş anlamlılar kullanılsa da aynı arızaysa eşleştir. "
+        "Sen teknik uygunsuzluk ve arıza kayıtlarını karşılaştıran bir yapay zeka analiz uzmanısın. "
+        "Yalnızca verilen metin maddelerini anlamsal olarak karşılaştır ve aynı teknik arızayı/problemi ifade edenleri eşleştir. "
+        "Sipariş, proje veya ticari detaylarla ilgilenme; yalnızca uygunsuzluk açıklamalarına odaklan. "
         "Yanıtını YALNIZCA geçerli bir JSON dizisi olarak üret, açıklama metni ekleme."
     )
     user_prompt = (
@@ -3619,6 +3765,11 @@ try:
         context: Optional[Dict[str, Any]] = None
         timeout_sec: Optional[int] = 90
 
+    class PlanBatchesRequest(BaseModel):
+        items_a: List[str]
+        items_b: List[str]
+        batch_size: Optional[int] = 5
+
     class BatchChunkRequest(BaseModel):
         base_url: Optional[str] = "https://api.aselixai.aselsan.com.tr/v1"
         api_key: Optional[str] = ""
@@ -4345,7 +4496,7 @@ try:
             "default_base_url": eff_url,
             "default_model": eff_model,
             "default_timeout": eff_timeout,
-            "default_batch_size": int(os.getenv("ASELIX_BATCH_SIZE", "8")),
+            "default_batch_size": int(os.getenv("ASELIX_BATCH_SIZE", "5")),
             "milli_url": ASELIX_MILLI_BASE_URL,
             "aynet_url": ASELIX_AYNET_BASE_URL
         }
@@ -4408,10 +4559,10 @@ try:
         msgs = []
         if req.context:
             ctx_info = (
-                f"[Kıyaslanan Veriler: '{req.context.get('dosya_1', '1. Veri')}' vs '{req.context.get('dosya_2', '2. Veri')}'. "
+                f"[Kıyaslanan Uygunsuzluk İstatistikleri: "
                 f"Ortak Kesişim: {req.context.get('intersection_count', 0)}, "
-                f"Yalnızca 1: {req.context.get('only_a_count', 0)}, "
-                f"Yalnızca 2: {req.context.get('only_b_count', 0)}, "
+                f"Yalnızca 1. Belgede: {req.context.get('only_a_count', 0)}, "
+                f"Yalnızca 2. Belgede: {req.context.get('only_b_count', 0)}, "
                 f"Jaccard Benzerlik: %{round(float(req.context.get('jaccard_similarity', 0)) * 100, 1)}, "
                 f"Uygulanan Benzerlik Eşiği: %{round(float(req.context.get('esik_orani', 0.8)) * 100)}]\n"
             )
@@ -4523,19 +4674,25 @@ try:
         effective_key = eff_key
 
         if engine_mode == "aselix" and effective_key:
-            # AselixAI için güvenli ve hızlı batch boyutu (varsayılan: 8)
-            batch_size = int(os.getenv("ASELIX_BATCH_SIZE", "8"))
+            # AselixAI için güvenli ve odaklı batch boyutu (varsayılan: 5)
+            batch_size = int(os.getenv("ASELIX_BATCH_SIZE", "5"))
             all_matched_pairs = []
             used_b = set()
 
-            for i in range(0, len(items_1), batch_size):
-                chunk_a = items_1[i:i + batch_size]
+            # Benzeyebilecek maddeleri önceden belirleyip akıllı batch'ler oluştur
+            planned_batches = create_similarity_aware_batches(items_1, items_2, batch_size=batch_size)
+
+            for b_info in planned_batches:
+                chunk_a = b_info["items_a"]
+                avail_b = [b for b in items_2 if b not in used_b]
+                if not avail_b:
+                    break
                 chunk_res = compare_items_with_aselix_batch(
                     base_url=eff_url,
                     api_key=effective_key,
                     model=eff_model,
                     items_a_batch=chunk_a,
-                    candidates_b=items_2,
+                    candidates_b=avail_b,
                     threshold=threshold,
                     timeout=eff_timeout
                 )
@@ -4713,8 +4870,10 @@ try:
 
             c1 = _pick(df1, col_1)
             c2 = _pick(df2, col_2)
-            items_1 = [clean_text_content(x) for x in df1[c1].dropna().astype(str).tolist()]
-            items_2 = [clean_text_content(x) for x in df2[c2].dropna().astype(str).tolist()]
+            raw_1 = df1[c1].dropna().astype(str).tolist()
+            raw_2 = df2[c2].dropna().astype(str).tolist()
+            items_1 = [strip_bakiye_metadata_from_text(x) for x in raw_1]
+            items_2 = [strip_bakiye_metadata_from_text(x) for x in raw_2]
             items_1 = [x for x in items_1 if x]
             items_2 = [x for x in items_2 if x]
             return {
@@ -4728,6 +4887,24 @@ try:
             }
         except Exception as e:
             return {"durum": "hata", "mesaj": f"Excel dosyaları okunamadı: {str(e)}"}
+
+    @web_app.post("/api/compare/plan-batches")
+    def api_compare_plan_batches(req: PlanBatchesRequest):
+        """
+        Kıyaslama öncesi A ve B maddelerini yerel benzerlik ön taramasından geçirerek
+        birbirine benzeyebilecek adayları aynı batch içinde kümeleyen akıllı planlama endpoint'i.
+        """
+        batches = create_similarity_aware_batches(
+            items_a=req.items_a,
+            items_b=req.items_b,
+            batch_size=req.batch_size or 5
+        )
+        return {
+            "durum": "basarili",
+            "batch_size": req.batch_size or 5,
+            "total_batches": len(batches),
+            "batches": batches
+        }
 
     @web_app.post("/api/compare/batch-chunk")
     def api_compare_batch_chunk(req: BatchChunkRequest):

@@ -25,7 +25,7 @@
     embeddingModel: 'text-embedding-3-small',
     engine: 'local', // 'local', 'embedding', or 'aselix'
     threshold: 80,   // %50 - %100
-    batchSize: 8,    // 8 satır: AselixAI'den 8-10 sn'de hızlı ve zaman aşımı korumalı yanıt için önerilen
+    batchSize: 5,    // 5 satır: Benzerlik kümelemeli ve AselixAI'den 3-5 sn'de ultra hızlı yanıt için önerilen
     timeoutSec: 90,  // 90 sn güvenlik limiti
     inputMode: 'excel', // 'excel' or 'paste'
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS.join(', ')
@@ -823,7 +823,7 @@
     // Settings modal inputs
     cfgBaseUrl.value = appConfig.baseUrl || NETWORK_URLS.milli;
     cfgApiKey.value = appConfig.apiKey || '';
-    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 8);
+    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 5);
     if (cfgTimeoutSec) cfgTimeoutSec.value = String(appConfig.timeoutSec || 90);
     if (cfgEmbeddingModel) cfgEmbeddingModel.value = appConfig.embeddingModel || 'text-embedding-3-small';
     if (cfgAllowedOrigins) cfgAllowedOrigins.value = appConfig.allowedOrigins || DEFAULT_ALLOWED_ORIGINS.join(', ');
@@ -1265,10 +1265,38 @@
       return;
     }
 
-    const chunks = [];
-    for (let i = 0; i < itemsA.length; i += batchSize) chunks.push(itemsA.slice(i, i + batchSize));
-    const total = chunks.length;
-    batchLog(`Hazır: A=${itemsA.length} tekil satır, B=${itemsB.length} tekil satır → ${total} batch × ${batchSize} satır (model: ${model})`);
+    // Akıllı Benzerlik Ön Kümeleme (Önce benzeyebilecekleri grupla ve 5'li batch'lere ayır)
+    let plannedBatches = [];
+    try {
+      progressStatusText.textContent = 'Maddeler ön benzerlik analizinden geçiriliyor ve akıllı kümeleniyor...';
+      const planRes = await fetchWithLimit('/api/compare/plan-batches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items_a: itemsA,
+          items_b: itemsB,
+          batch_size: batchSize
+        })
+      }, 'Ön Kümeleme Planı');
+      if (planRes && planRes.data && planRes.data.durum === 'basarili' && Array.isArray(planRes.data.batches)) {
+        plannedBatches = planRes.data.batches;
+      }
+    } catch (e) {
+      console.warn('Ön kümeleme servisi yanıt vermedi, standart dilimleme kullanılıyor:', e);
+    }
+
+    if (!plannedBatches || !plannedBatches.length) {
+      const chunks = [];
+      for (let i = 0; i < itemsA.length; i += batchSize) chunks.push(itemsA.slice(i, i + batchSize));
+      plannedBatches = chunks.map((c, idx) => ({
+        batch_index: idx + 1,
+        items_a: c,
+        cluster_label: `Batch ${idx + 1}`
+      }));
+    }
+
+    const total = plannedBatches.length;
+    batchLog(`Hazır: A=${itemsA.length} tekil satır, B=${itemsB.length} tekil satır → ${total} akıllı kümelenmiş batch × ${batchSize} satır (model: ${model})`);
 
     // 2) Batch döngüsü
     const allPairs = [];
@@ -1276,8 +1304,10 @@
     let aiOk = 0, fallbackCount = 0, failCount = 0;
 
     for (let i = 0; i < total; i++) {
-      const chunk = chunks[i];
-      const label = `Batch ${i + 1}/${total}`;
+      const batchInfo = plannedBatches[i];
+      const chunk = batchInfo.items_a || [];
+      const groupTag = batchInfo.cluster_label ? ` [${batchInfo.cluster_label}]` : '';
+      const label = `Batch ${i + 1}/${total}${groupTag}`;
       setProgress(5 + (i / total) * 80);
       progressStatusText.textContent = `${label} AselixAI'ye gönderildi (${chunk.length} satır)...`;
 
@@ -1404,7 +1434,7 @@
     const thresholdDec = (appConfig.threshold || 80) / 100.0;
     const isAselix = appConfig.engine === 'aselix';
     const isEmbedding = appConfig.engine === 'embedding';
-    const batchSize = parseInt(appConfig.batchSize, 10) || 15;
+    const batchSize = parseInt(appConfig.batchSize, 10) || 5;
     const effectiveApiKey = (appConfig.apiKey || '').trim() || (kokpitIdentity.token || '').trim();
     const hasEffectiveKey = Boolean(effectiveApiKey || (serverConfig && serverConfig.has_server_api_key));
 
@@ -2241,7 +2271,7 @@
     }
     cfgBaseUrl.value = appConfig.baseUrl || NETWORK_URLS.milli;
     cfgApiKey.value = appConfig.apiKey || '';
-    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 8);
+    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 5);
     if (cfgTimeoutSec) cfgTimeoutSec.value = String(appConfig.timeoutSec || 90);
     if (serverApiKeyDetectedBadge) {
       serverApiKeyDetectedBadge.style.display = (serverConfig && serverConfig.has_server_api_key) ? 'block' : 'none';
@@ -2269,7 +2299,7 @@
     appConfig.baseUrl = cfgBaseUrl.value.trim() || NETWORK_URLS.milli;
     appConfig.apiKey = cfgApiKey.value.trim();
     appConfig.model = cfgModelSelect.value || 'aselix-llm-v1';
-    if (cfgBatchSize) appConfig.batchSize = parseInt(cfgBatchSize.value, 10) || 8;
+    if (cfgBatchSize) appConfig.batchSize = parseInt(cfgBatchSize.value, 10) || 5;
     if (cfgTimeoutSec) appConfig.timeoutSec = parseInt(cfgTimeoutSec.value, 10) || 90;
     if (cfgEmbeddingModel) appConfig.embeddingModel = cfgEmbeddingModel.value.trim() || 'text-embedding-3-small';
 
