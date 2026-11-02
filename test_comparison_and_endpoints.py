@@ -438,13 +438,13 @@ class TestKokpitIdentityAndEmbedding(unittest.TestCase):
         self.assertIn("kpi_tablosu", s)
         self.assertIn("sunucu", s)
         self.assertIn("app_port", s["sunucu"])
-        self.assertEqual(s["sunucu"]["app_port"], 8000)
+        self.assertEqual(s["sunucu"]["app_port"], 9000)
 
         # .env üzerinden veya ortam değişkeninden port değiştirilebilirlik testi
         from unittest import mock
         from app import get_server_config
         srv = get_server_config()
-        self.assertEqual(srv["port"], 8000)
+        self.assertEqual(srv["port"], 9000)
         with mock.patch.dict(os.environ, {"APP_PORT": "9090"}):
             self.assertEqual(get_server_config()["port"], 9090)
         with mock.patch.dict(os.environ, {"PORT": "7070", "APP_PORT": ""}):

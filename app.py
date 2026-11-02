@@ -1874,34 +1874,79 @@ def compute_embedding_venn(
 # UGESUDKOKPİT VERİTABANI (.env YAPILANDIRMASI & OTOMATİK TABLO/ŞEMA DENETİMİ)
 # ==============================================================================
 
-ENV_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+def find_env_file(explicit_path: Optional[str] = None) -> str:
+    """
+    .env dosyasını sırasıyla şu konumlarda ve isimlerde arar:
+    1. Açıkça belirtilen yol (varsa)
+    2. app.py'nin bulunduğu proje dizini: <proje_dizini>\\.env
+    3. Terminalin çalıştırıldığı mevcut çalışma dizini: os.getcwd()\\.env
+    4. Windows Not Defteri'nin uzantı ekleme ihtimaline karşı .env.txt
+    5. 'env' veya 'env.txt'
+    6. Kullanıcı Masaüstü dizini (~\\Desktop\\mcp tool v1\\.env veya ~\\Desktop\\.env)
+    """
+    if explicit_path and os.path.isfile(explicit_path):
+        return os.path.abspath(explicit_path)
+
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    cwd = os.getcwd()
+    desktop_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+
+    candidates = [
+        os.path.join(app_dir, ".env"),
+        os.path.join(cwd, ".env"),
+        os.path.join(app_dir, ".env.txt"),
+        os.path.join(cwd, ".env.txt"),
+        os.path.join(app_dir, "env"),
+        os.path.join(cwd, "env"),
+        os.path.join(app_dir, "env.txt"),
+        os.path.join(desktop_dir, "mcp tool v1", ".env"),
+        os.path.join(desktop_dir, "mcp tool v1", ".env.txt"),
+        os.path.join(desktop_dir, ".env"),
+        os.path.join(desktop_dir, ".env.txt"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return os.path.abspath(c)
+    return os.path.join(app_dir, ".env")
+
+
+ENV_FILE_PATH = find_env_file()
 
 
 def load_env_file_vars(env_path: Optional[str] = None, override: bool = False) -> Dict[str, str]:
     """
-    Proje dizinindeki `.env` dosyasını okur ve hem sözlük olarak döndürür hem de
-    `os.environ` içerisine aktarır. Harici paket (`python-dotenv`) olmasa bile çalışır.
+    Proje dizinindeki veya çalışma dizinindeki `.env` dosyasını okur ve hem sözlük olarak döndürür
+    hem de `os.environ` içerisine aktarır. Windows Not Defteri UTF-8 BOM (\ufeff), boşluklar,
+    satır içi yorumlar ve uzantı farklılıklarına tam toleranslıdır.
     `override=False` olduğunda mevcut ortam değişkenleri ezilmez.
     """
-    target_path = env_path or ENV_FILE_PATH
+    target_path = find_env_file(env_path)
     loaded: Dict[str, str] = {}
-    if not os.path.exists(target_path):
+    if not os.path.isfile(target_path):
         return loaded
+
     try:
-        with open(target_path, "r", encoding="utf-8") as f:
+        with open(target_path, "r", encoding="utf-8-sig", errors="replace") as f:
             for raw_line in f:
                 line = raw_line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 k, v = line.split("=", 1)
-                key = k.strip()
-                val = v.strip().strip('"').strip("'")
+                key = k.strip().lstrip("\ufeff")
+                val = v.strip()
+                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                    val = val[1:-1]
+                else:
+                    if " #" in val:
+                        val = val.split(" #", 1)[0].strip()
+                    val = val.strip('"').strip("'")
+
                 if key:
                     loaded[key] = val
                     if override or key not in os.environ:
                         os.environ[key] = val
     except Exception as e:
-        _safe_log(f"[ENV-WARN] .env okunurken uyarı: {e}")
+        _safe_log(f"[ENV-WARN] .env ({target_path}) okunurken uyarı: {e}")
     return loaded
 
 
@@ -1914,18 +1959,22 @@ def get_server_config() -> Dict[str, Any]:
     `.env` dosyasından ve ortam değişkenlerinden HTTP sunucu host ve port bilgilerini
     dinamik olarak alır. (APP_PORT / PORT, APP_HOST / HOST)
     """
-    load_env_file_vars()
-    host = (os.environ.get("APP_HOST") or os.environ.get("HOST") or "0.0.0.0").strip()
-    raw_port = (os.environ.get("APP_PORT") or os.environ.get("PORT") or "8000").strip()
+    env_vars = load_env_file_vars()
+    target_env = find_env_file()
+    # Öncelik: os.environ (APP_PORT/PORT) -> .env dosyası (APP_PORT/PORT) -> Varsayılan (9000)
+    host = (os.environ.get("APP_HOST") or os.environ.get("HOST") or env_vars.get("APP_HOST") or env_vars.get("HOST") or "0.0.0.0").strip()
+    raw_port = (os.environ.get("APP_PORT") or os.environ.get("PORT") or env_vars.get("APP_PORT") or env_vars.get("PORT") or "9000").strip()
     try:
         port = int(raw_port)
     except Exception:
-        port = 8000
+        port = 9000
     return {
         "host": host,
         "port": port,
         "app_host": host,
-        "app_port": port
+        "app_port": port,
+        "env_file": target_env,
+        "env_file_exists": os.path.isfile(target_env)
     }
 
 
@@ -1934,18 +1983,19 @@ def get_db_config() -> Dict[str, Any]:
     `.env` dosyasından ve ortam değişkenlerinden PostgreSQL bağlantı bilgilerini
     (host, port, dbname, user, password, schema, tablolar) dinamik olarak alır.
     """
-    load_env_file_vars()
-    host = os.environ.get("DB_HOST", "localhost").strip()
-    port = os.environ.get("DB_PORT", "5432").strip()
-    dbname = os.environ.get("DB_NAME", "ud_kokpit").strip()
-    user = os.environ.get("DB_USER", "postgres").strip()
-    password = os.environ.get("DB_PASSWORD", "563563").strip()
-    timeout = int(os.environ.get("DB_CONNECT_TIMEOUT", "4") or 4)
-    schema = os.environ.get("DB_SCHEMA", "teslimat_md").strip()
-    bakiye_table = os.environ.get("DB_BAKIYE_TABLE", "bakiye_siparis").strip()
-    kpi_table = os.environ.get("DB_KPI_TABLE", "dryrun_fkt_skt_kpi").strip()
+    env_vars = load_env_file_vars()
+    target_env = find_env_file()
+    host = (os.environ.get("DB_HOST") or env_vars.get("DB_HOST") or "localhost").strip()
+    port = (os.environ.get("DB_PORT") or env_vars.get("DB_PORT") or "5432").strip()
+    dbname = (os.environ.get("DB_NAME") or env_vars.get("DB_NAME") or "ud_kokpit").strip()
+    user = (os.environ.get("DB_USER") or env_vars.get("DB_USER") or "postgres").strip()
+    password = (os.environ.get("DB_PASSWORD") or env_vars.get("DB_PASSWORD") or "563563").strip()
+    timeout = int(os.environ.get("DB_CONNECT_TIMEOUT") or env_vars.get("DB_CONNECT_TIMEOUT") or "4")
+    schema = (os.environ.get("DB_SCHEMA") or env_vars.get("DB_SCHEMA") or "teslimat_md").strip()
+    bakiye_table = (os.environ.get("DB_BAKIYE_TABLE") or env_vars.get("DB_BAKIYE_TABLE") or "bakiye_siparis").strip()
+    kpi_table = (os.environ.get("DB_KPI_TABLE") or env_vars.get("DB_KPI_TABLE") or "dryrun_fkt_skt_kpi").strip()
 
-    explicit_dsn = os.environ.get("UD_KOKPIT_DB_DSN", "").strip()
+    explicit_dsn = (os.environ.get("UD_KOKPIT_DB_DSN") or env_vars.get("UD_KOKPIT_DB_DSN") or "").strip()
     dsn = explicit_dsn if explicit_dsn else (
         f"host={host} port={port} dbname={dbname} user={user} password={password}"
     )
@@ -1960,8 +2010,8 @@ def get_db_config() -> Dict[str, Any]:
         "bakiye_table": bakiye_table,
         "kpi_table": kpi_table,
         "dsn": dsn,
-        "env_file": ENV_FILE_PATH,
-        "env_file_exists": os.path.exists(ENV_FILE_PATH)
+        "env_file": target_env,
+        "env_file_exists": os.path.isfile(target_env)
     }
 
 
@@ -4944,13 +4994,17 @@ def main():
     # 1. Ağdaki Herkese Açık Standart HTTP Modu (Önerilen)
     if args.transport in ["http", "sse"]:
         import uvicorn
+        db_cfg = get_db_config()
+        env_file_path = srv_cfg.get("env_file")
+        env_exists = srv_cfg.get("env_file_exists", False)
         sys.stderr.write(
             f"\n"
             f"===============================================================================\n"
             f"[HTTP SUNUCUSU] Agdaki Herkese Acik Olarak Baslatiliyor!\n"
             f"Adres: http://{effective_host}:{effective_port}\n"
             f"Tarayicidan erisim / Dokumantasyon: http://<SANAL_PC_IP>:{effective_port}/docs\n"
-            f"Yapilandirma: .env (APP_PORT={default_port}, APP_HOST={default_host})\n"
+            f"Yapilandirma Dosyasi: {env_file_path} (Okundu: {env_exists})\n"
+            f"Veritabani (PostgreSQL): {db_cfg['host']}:{db_cfg['port']}/{db_cfg['dbname']} (Sema: {db_cfg['schema']})\n"
             f"Durdurmak icin CTRL+C tuslarina basin.\n"
             f"===============================================================================\n\n"
         )
