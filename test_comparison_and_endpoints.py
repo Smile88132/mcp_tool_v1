@@ -239,7 +239,8 @@ class TestKokpitIdentityAndEmbedding(unittest.TestCase):
         self.assertNotIn("x-frame-options", [k.lower() for k in resp.headers.keys()])
         csp = resp.headers.get("Content-Security-Policy", "")
         self.assertIn("frame-ancestors", csp)
-        self.assertIn("http://localhost:3004", csp)
+        self.assertIn("*", csp)
+        self.assertEqual(resp.headers.get("Access-Control-Allow-Origin"), "*")
 
     def test_kokpit_identity_push_and_get(self):
         payload = {
@@ -285,10 +286,15 @@ class TestKokpitIdentityAndEmbedding(unittest.TestCase):
         self.assertTrue(gdata["authenticated"])
         self.assertEqual(gdata["user"]["mudurluk_id"], 191148)
 
-    def test_invalid_identity_returns_400(self):
-        bad_res = self.client.post("/api/identity", json={"user": {}})
-        self.assertEqual(bad_res.status_code, 400)
-        self.assertIn("error", bad_res.json())
+    def test_all_incoming_identity_requests_accepted(self):
+        # Dışarıdan gelen tüm talepler onay gerekmeksizin doğrudan kabul edilir
+        res = self.client.post("/api/identity", json={"user": {}})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "success")
+
+        res_bare = self.client.post("/api/identity", json={"sicil": "23365", "isim": "İsmail Yılmaz"})
+        self.assertEqual(res_bare.status_code, 200)
+        self.assertEqual(res_bare.json()["user"]["sicil"], "23365")
 
     def test_external_input_with_embeddings_and_auto_compare(self):
         ext_payload = {

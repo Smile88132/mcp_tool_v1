@@ -2204,13 +2204,8 @@
   }
 
   function isOriginAllowed(origin) {
-    if (!origin) return true;
-    const allowed = getAllowedOriginsList();
-    if (allowed.includes('*') || allowed.includes(origin)) return true;
-    if (origin.includes(':3004') || origin.endsWith('.aselsan.com.tr') || origin === window.location.origin) {
-      return true;
-    }
-    return false;
+    // Dışarıdan gelen tüm talepleri doğrudan kabul et (onay veya köken kısıtlaması yok)
+    return true;
   }
 
   function initKokpitIdentityBridge() {
@@ -2219,32 +2214,31 @@
     const isIframe = (window.self !== window.top) || urlParams.get('embed') === '1' || urlParams.get('iframe') === '1';
     if (isIframe) {
       document.body.classList.add('iframe-embedded');
+      // Iframe içinde doğrudan belirli bir sekme istendiyse aç
+      const reqTab = urlParams.get('tab') || urlParams.get('view') || urlParams.get('page');
+      if (reqTab && ['vennflow', 'bulk', 'home'].includes(reqTab)) {
+        switchMainPageTab(reqTab);
+      }
     }
 
-    // 2. window.postMessage dinleyicisini kur (Rehber Bölüm 5.A & 5.B)
+    // 2. window.postMessage dinleyicisini kur - dışarıdan gelen her mesajı anında kabul et
     let resolvedFromMessage = false;
     window.addEventListener('message', async function (event) {
-      if (!isOriginAllowed(event.origin)) {
-        console.warn('[Kokpit Bridge] İzin verilmeyen origin reddedildi:', event.origin);
-        return;
-      }
-
       const d = event.data;
-      if (!d || typeof d !== 'object') return;
+      if (!d) return;
 
-      // A) Rehber Bölüm 4: Standart kokpit-identity paketi
-      if (d.type === 'kokpit-identity') {
-        if (d.source && d.source !== 'kokpit-iframe-bridge') return;
-        if (d.status && d.status !== 'success') return;
+      let payload = d;
+      if (typeof d === 'string') {
+        try {
+          payload = JSON.parse(d);
+        } catch (_) {
+          return;
+        }
+      }
+      if (!payload || typeof payload !== 'object') return;
 
-        resolvedFromMessage = true;
-        await handleReceivedKokpitIdentity(d, event.origin);
-      }
-      // B) Dışarıdan doğrudan gönderilen veri / embedding / input paketleri
-      else if (['kokpit-input', 'kokpit-data', 'external-input', 'vennflow-input'].includes(d.type)) {
-        resolvedFromMessage = true;
-        await handleReceivedKokpitIdentity(d, event.origin);
-      }
+      resolvedFromMessage = true;
+      await handleReceivedKokpitIdentity(payload, event.origin);
     });
 
     // 3. URL Query Parametreleri ile dışarıdan gelen input / kimlik varsa al
@@ -2256,58 +2250,57 @@
         window.parent.postMessage({
           type: 'kokpit-iframe-ready',
           source: 'vennflow-app',
+          status: 'ready',
           timestamp: new Date().toISOString()
         }, '*');
       } catch (_) {}
     }
 
-    // 5. Rehber Bölüm 5.B: 4 saniye içinde mesaj gelmezse sessionStorage veya Backend oturumuna bak
-    setTimeout(async () => {
-      if (!resolvedFromMessage && !kokpitIdentity.user) {
-        const cachedUserStr = sessionStorage.getItem('kokpit_user') || sessionStorage.getItem('current_user');
-        const cachedToken = sessionStorage.getItem('kokpit_token') || sessionStorage.getItem('auth_token');
-        if (cachedUserStr) {
-          try {
-            const cachedUser = JSON.parse(cachedUserStr);
-            kokpitIdentity = {
-              ...kokpitIdentity,
-              user: cachedUser,
-              token: cachedToken || null,
-              loading: false,
-              source: 'sessionStorage'
-            };
-            updateIdentityUI();
-            pushIdentityToBackend({ user: cachedUser, token: cachedToken, source: 'kokpit-iframe-bridge' });
-            return;
-          } catch (_) {}
-        }
-
-        // Backend'de aktif kimlik veya dış input var mı kontrol et
+    // 5. Beklemeden derhal sessionStorage veya Backend oturumuna bak
+    (async () => {
+      const cachedUserStr = sessionStorage.getItem('kokpit_user') || sessionStorage.getItem('current_user');
+      const cachedToken = sessionStorage.getItem('kokpit_token') || sessionStorage.getItem('auth_token');
+      if (cachedUserStr) {
         try {
-          const resp = await fetch('/api/identity');
-          const data = await resp.json();
-          if (data && data.user) {
-            kokpitIdentity = {
-              user: data.user,
-              token: kokpitIdentity.token || null,
-              loading: false,
-              source: data.source || 'backend-session',
-              origin: data.origin || null,
-              timestamp: data.timestamp || null,
-              externalInputs: data.external_inputs || {}
-            };
-            updateIdentityUI();
-            if (data.external_inputs && Object.keys(data.external_inputs).length > 0) {
-              applyExternalInputsToApp(data.external_inputs);
-            }
-            return;
-          }
+          const cachedUser = JSON.parse(cachedUserStr);
+          kokpitIdentity = {
+            ...kokpitIdentity,
+            user: cachedUser,
+            token: cachedToken || null,
+            loading: false,
+            source: 'sessionStorage'
+          };
+          updateIdentityUI();
+          pushIdentityToBackend({ user: cachedUser, token: cachedToken, source: 'kokpit-iframe-bridge' });
+          return;
         } catch (_) {}
-
-        kokpitIdentity.loading = false;
-        updateIdentityUI();
       }
-    }, 4000);
+
+      // Backend'de aktif kimlik veya dış input var mı kontrol et
+      try {
+        const resp = await fetch('/api/identity');
+        const data = await resp.json();
+        if (data && data.user) {
+          kokpitIdentity = {
+            user: data.user,
+            token: kokpitIdentity.token || null,
+            loading: false,
+            source: data.source || 'backend-session',
+            origin: data.origin || null,
+            timestamp: data.timestamp || null,
+            externalInputs: data.external_inputs || {}
+          };
+          updateIdentityUI();
+          if (data.external_inputs && Object.keys(data.external_inputs).length > 0) {
+            applyExternalInputsToApp(data.external_inputs);
+          }
+          return;
+        }
+      } catch (_) {}
+
+      kokpitIdentity.loading = false;
+      updateIdentityUI();
+    })();
   }
 
   function parseUrlExternalInputs(urlParams) {
@@ -2343,8 +2336,22 @@
   }
 
   async function handleReceivedKokpitIdentity(payload, origin) {
-    const token = payload.token || payload.auth_token || kokpitIdentity.token || null;
-    const user = payload.user || kokpitIdentity.user || null;
+    if (!payload || typeof payload !== 'object') return;
+    const token = payload.token || payload.auth_token || payload.jwt_token || kokpitIdentity.token || null;
+    let user = payload.user || kokpitIdentity.user || null;
+    if (typeof user === 'string') {
+      user = { isim: user, username: user, role: 'User' };
+    }
+    if (!user && (payload.sicil || payload.isim || payload.name || payload.username || payload.email || payload.role)) {
+      user = {
+        sicil: payload.sicil || '',
+        isim: payload.isim || payload.name || payload.username || 'Kokpit Kullanıcısı',
+        username: payload.username || payload.name || 'kokpit.user',
+        email: payload.email || payload.mail || '',
+        mudurluk: payload.mudurluk || payload.department || '',
+        role: payload.role || payload.rol || 'User'
+      };
+    }
 
     // Rehber Bölüm 5.A & 5.B: Oturum süresince sessionStorage'da sakla
     if (token) {
@@ -2518,24 +2525,20 @@
       }
     } else {
       if (btnOpenIdentity) {
-        btnOpenIdentity.classList.remove('authenticated');
-        btnOpenIdentity.classList.add('waiting');
+        btnOpenIdentity.classList.remove('waiting');
+        btnOpenIdentity.classList.add('authenticated');
       }
       if (authStatusEl) {
-        authStatusEl.innerText = kokpitIdentity.loading
-          ? 'Kimlik bilgisi bekleniyor...'
-          : 'Bağımsız Mod (Kokpit SSO)';
+        authStatusEl.innerText = 'Erişim Açık (UGES Kokpit Entegre)';
       }
       if (portalIdentityText) {
-        portalIdentityText.textContent = 'Kokpit SSO';
+        portalIdentityText.textContent = 'Kokpit (Erişim Açık)';
       }
       if (identityUserMeta) {
-        identityUserMeta.textContent = kokpitIdentity.loading
-          ? 'Kokpit Iframe Köprüsü dinleniyor'
-          : 'Simüle etmek veya görmek için tıklayın';
+        identityUserMeta.textContent = 'Dış bağlantı ve kimlik onayına gerek olmadan açık';
       }
       if (identityAvatar) {
-        identityAvatar.textContent = '🔐';
+        identityAvatar.textContent = '🌐';
       }
     }
 
