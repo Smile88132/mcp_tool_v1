@@ -12,6 +12,8 @@ Ortam Özellikleri:
 import os
 import sys
 import io
+import re
+import ast
 import json
 import uuid
 import argparse
@@ -1031,20 +1033,52 @@ def call_aselsan_llm_suite_flow(
         }
 
 
-def fetch_aselix_models(base_url: str = "https://api.aselixai.aselsan.com.tr/v1", api_key: Optional[str] = None) -> Dict[str, Any]:
+ASELIX_MILLI_BASE_URL = "https://api.aselixai.aselsan.com.tr/v1"
+ASELIX_AYNET_BASE_URL = "https://agate.aselsan.com.tr/send/milli/api.aselixai/v1"
+
+
+def get_effective_aselix_config(
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    timeout: Optional[int] = None
+) -> Tuple[str, str, str, int]:
+    """
+    AselixAI çağrıları için en uygun yapılandırmayı belirler.
+    Öncelik Sırası:
+      1. Çağrı parametresi
+      2. .env / os.environ ortam değişkenleri (ASELIX_*)
+      3. Kokpit SSO Token (KOKPIT_IDENTITY_STORE["jwt_token"])
+      4. Yerleşik varsayılanlar (Milli Ağ, aselix-llm-v1, 90 sn)
+    """
+    eff_url = (base_url or "").strip() or os.getenv("ASELIX_BASE_URL", "").strip() or ASELIX_MILLI_BASE_URL
+    eff_url = eff_url.rstrip("/")
+
+    eff_key = (api_key or "").strip() or os.getenv("ASELIX_API_KEY", "").strip() or (KOKPIT_IDENTITY_STORE.get("jwt_token") or "").strip()
+
+    eff_model = (model or "").strip() or os.getenv("ASELIX_MODEL", "").strip() or "aselix-llm-v1"
+
+    if timeout and timeout > 0:
+        eff_timeout = timeout
+    else:
+        env_to = os.getenv("ASELIX_TIMEOUT", "").strip()
+        eff_timeout = int(env_to) if env_to.isdigit() else 90
+
+    return eff_url, eff_key, eff_model, eff_timeout
+
+
+def fetch_aselix_models(base_url: Optional[str] = None, api_key: Optional[str] = None) -> Dict[str, Any]:
     """
     ASELSAN AselixAI REST API üzerinden mevcut modelleri listeler (GET /models).
-    Hem Milli Ağ (https://api.aselixai.aselsan.com.tr/v1) hem de Aynet Ağı 
-    (https://agate.aselsan.com.tr/send/milli/api.aselixai/v1) ile uyumludur.
+    Hem Milli Ağ hem Aynet ile uyumludur; birincil ağ yanıt vermezse otomatik alternatif denenir.
     """
-    if not base_url:
-        base_url = "https://api.aselixai.aselsan.com.tr/v1"
-    base_url = base_url.rstrip("/")
-    url = f"{base_url}/models"
-    headers = {"Content-Type": "application/json"}
-    if api_key and api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
-        headers["x-api-key"] = api_key.strip()
+    eff_url, eff_key, _, _ = get_effective_aselix_config(base_url, api_key, timeout=12)
+
+    candidate_urls = [eff_url]
+    if "api.aselixai.aselsan.com.tr" in eff_url:
+        candidate_urls.append(ASELIX_AYNET_BASE_URL)
+    elif "agate.aselsan.com.tr" in eff_url:
+        candidate_urls.append(ASELIX_MILLI_BASE_URL)
 
     fallback_models = [
         "aselix-llm-v1",
@@ -1054,125 +1088,174 @@ def fetch_aselix_models(base_url: str = "https://api.aselixai.aselsan.com.tr/v1"
         "qwen-2.5-7b-instruct"
     ]
 
-    try:
-        resp = requests.get(url, headers=headers, timeout=10, verify=False)
-        if resp.status_code == 200:
-            data = resp.json()
-            model_ids = []
-            if isinstance(data, dict):
-                items = data.get("data") or data.get("models") or []
-                if isinstance(items, list):
-                    for it in items:
+    for target_url in candidate_urls:
+        url = f"{target_url.rstrip('/')}/models"
+        headers = {"Content-Type": "application/json"}
+        if eff_key:
+            headers["Authorization"] = f"Bearer {eff_key}"
+            headers["x-api-key"] = eff_key
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=8, verify=False)
+            if resp.status_code == 200:
+                data = resp.json()
+                model_ids = []
+                if isinstance(data, dict):
+                    items = data.get("data") or data.get("models") or []
+                    if isinstance(items, list):
+                        for it in items:
+                            if isinstance(it, dict) and "id" in it:
+                                model_ids.append(it["id"])
+                            elif isinstance(it, str):
+                                model_ids.append(it)
+                elif isinstance(data, list):
+                    for it in data:
                         if isinstance(it, dict) and "id" in it:
                             model_ids.append(it["id"])
                         elif isinstance(it, str):
                             model_ids.append(it)
-            elif isinstance(data, list):
-                for it in data:
-                    if isinstance(it, dict) and "id" in it:
-                        model_ids.append(it["id"])
-                    elif isinstance(it, str):
-                        model_ids.append(it)
 
-            return {
-                "durum": "basarili",
-                "kaynak": "canli_api",
-                "base_url": base_url,
-                "modeller": model_ids if model_ids else fallback_models,
-                "mesaj": f"{len(model_ids)} model AselixAI API'den başarıyla listelendi."
-            }
-        else:
-            return {
-                "durum": "uyari",
-                "hata_kodu": resp.status_code,
-                "base_url": base_url,
-                "mesaj": f"AselixAI API yanıtı ({resp.status_code}): {resp.text[:200]}",
-                "modeller": fallback_models
-            }
-    except Exception as e:
-        return {
-            "durum": "uyari",
-            "hata_turu": type(e).__name__,
-            "base_url": base_url,
-            "mesaj": f"API çağrısı uyarısı (İntranet veya anahtar kontrolü gerekebilir): {str(e)}",
-            "modeller": fallback_models
-        }
+                net_name = "aynet" if "agate" in target_url else "milli"
+                return {
+                    "durum": "basarili",
+                    "kaynak": "canli_api",
+                    "base_url": target_url,
+                    "aktif_ag": net_name,
+                    "modeller": model_ids if model_ids else fallback_models,
+                    "mesaj": f"{len(model_ids)} model AselixAI API'den başarıyla listelendi ({net_name.upper()})."
+                }
+        except Exception:
+            continue
+
+    return {
+        "durum": "uyari",
+        "base_url": eff_url,
+        "mesaj": "AselixAI API'sine erişilemedi (Milli Ağ ve Aynet denendi), yerleşik model listesi sağlandı.",
+        "modeller": fallback_models
+    }
 
 
 def call_aselix_chat(
-    base_url: str = "https://api.aselixai.aselsan.com.tr/v1",
+    base_url: Optional[str] = None,
     api_key: Optional[str] = None,
-    model: str = "aselix-llm-v1",
+    model: Optional[str] = None,
     messages: Optional[List[Dict[str, str]]] = None,
     temperature: float = 0.2,
-    timeout: int = 50
+    timeout: Optional[int] = None,
+    allow_fallback_network: bool = True
 ) -> Dict[str, Any]:
     """
     ASELSAN AselixAI POST /chat/completions endpointine OpenAI uyumlu istek gönderir.
-    1 dakikalık (varsayılan timeout=50sn) zaman aşımı sınırını kesinlikle aşmaz.
+    - Zaman aşımı korumalıdır (varsayılan 90 sn, .env ASELIX_TIMEOUT ile esnetilebilir).
+    - Çift ağ otomatik geçiş (Milli Ağ <-> Aynet): Birincil uç nokta timeout veya bağlantı hatası verirse
+      otomatik olarak alternatif ağ denenir.
+    - .env API anahtarını ve Kokpit SSO tokenini otomatik tanır.
     """
-    if not base_url:
-        base_url = "https://api.aselixai.aselsan.com.tr/v1"
-    base_url = base_url.rstrip("/")
-    url = f"{base_url}/chat/completions"
+    eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(base_url, api_key, model, timeout)
+    t_start = time.time()
 
-    headers = {"Content-Type": "application/json"}
-    if api_key and api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
-        headers["x-api-key"] = api_key.strip()
+    candidate_urls = [eff_url]
+    if allow_fallback_network:
+        if "api.aselixai.aselsan.com.tr" in eff_url:
+            candidate_urls.append(ASELIX_AYNET_BASE_URL)
+        elif "agate.aselsan.com.tr" in eff_url:
+            candidate_urls.append(ASELIX_MILLI_BASE_URL)
 
-    payload = {
-        "model": model or "aselix-llm-v1",
-        "messages": messages or [{"role": "user", "content": "Merhaba"}],
-        "temperature": temperature
-    }
+    last_err: Optional[Dict[str, Any]] = None
+    attempted: List[Dict[str, Any]] = []
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=timeout, verify=False)
-        if resp.status_code == 200:
-            data = resp.json()
-            content = ""
-            if isinstance(data, dict):
-                choices = data.get("choices", [])
-                if choices and isinstance(choices, list):
-                    first_choice = choices[0]
-                    if isinstance(first_choice, dict):
-                        msg = first_choice.get("message", {})
-                        if isinstance(msg, dict):
-                            content = msg.get("content", "")
-            if not content:
-                content = json.dumps(data, ensure_ascii=False)
-            return {
-                "durum": "basarili",
-                "model": model,
-                "cevap": content,
-                "raw": data
+    for idx, target_url in enumerate(candidate_urls):
+        url = f"{target_url.rstrip('/')}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if eff_key:
+            headers["Authorization"] = f"Bearer {eff_key}"
+            headers["x-api-key"] = eff_key
+
+        payload = {
+            "model": eff_model,
+            "messages": messages or [{"role": "user", "content": "Merhaba"}],
+            "temperature": temperature
+        }
+
+        # İkinci ağ denemesi için kalan süreyi hesapla
+        elapsed_so_far = time.time() - t_start
+        per_try_timeout = max(20, eff_timeout - int(elapsed_so_far))
+
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=per_try_timeout, verify=False)
+            elapsed = round(time.time() - t_start, 2)
+            if resp.status_code == 200:
+                data = resp.json()
+                content = ""
+                if isinstance(data, dict):
+                    choices = data.get("choices", [])
+                    if choices and isinstance(choices, list):
+                        first_choice = choices[0]
+                        if isinstance(first_choice, dict):
+                            msg = first_choice.get("message", {})
+                            if isinstance(msg, dict):
+                                content = msg.get("content", "")
+                if not content:
+                    content = json.dumps(data, ensure_ascii=False)
+                
+                net_name = "aynet" if "agate" in target_url else "milli"
+                return {
+                    "durum": "basarili",
+                    "model": eff_model,
+                    "cevap": content,
+                    "aktif_url": target_url,
+                    "aktif_ag": net_name,
+                    "gecen_sure_sn": elapsed,
+                    "raw": data
+                }
+            else:
+                last_err = {
+                    "durum": "hata",
+                    "hata_kodu": resp.status_code,
+                    "aktif_url": target_url,
+                    "mesaj": f"AselixAI API Hatası ({resp.status_code}) [{target_url}]: {resp.text[:300]}"
+                }
+                attempted.append({"url": target_url, "status": resp.status_code, "err": resp.text[:150]})
+        except requests.exceptions.Timeout:
+            last_err = {
+                "durum": "zaman_asimi",
+                "hata_kodu": 408,
+                "aktif_url": target_url,
+                "mesaj": f"AselixAI API isteği {per_try_timeout} saniye içinde yanıt vermedi ({target_url})."
             }
-        else:
-            return {
+            attempted.append({"url": target_url, "status": 408, "err": f"Timeout ({per_try_timeout}s)"})
+        except Exception as e:
+            last_err = {
                 "durum": "hata",
-                "hata_kodu": resp.status_code,
-                "mesaj": f"AselixAI API Hatası ({resp.status_code}): {resp.text}"
+                "hata_turu": type(e).__name__,
+                "aktif_url": target_url,
+                "mesaj": f"AselixAI API Çağrı Hatası ({target_url}): {str(e)}"
             }
-    except requests.exceptions.Timeout:
-        return {
-            "durum": "zaman_asimi",
-            "hata_kodu": 408,
-            "mesaj": f"AselixAI API isteği {timeout} saniye içinde yanıt vermedi (1 dakikalık zaman aşımı koruması devreye girdi)."
-        }
-    except Exception as e:
-        return {
-            "durum": "hata",
-            "hata_turu": type(e).__name__,
-            "mesaj": f"AselixAI API Çağrı Hatası: {str(e)}"
-        }
+            attempted.append({"url": target_url, "status": 0, "err": str(e)})
+
+    total_elapsed = round(time.time() - t_start, 2)
+    if last_err:
+        last_err["toplam_gecen_sure_sn"] = total_elapsed
+        last_err["denenen_aglar"] = attempted
+        return last_err
+
+    return {
+        "durum": "hata",
+        "mesaj": "AselixAI servisine bağlanılamadı. Lütfen ağ geçişini veya API anahtarınızı kontrol edin.",
+        "toplam_gecen_sure_sn": total_elapsed,
+        "denenen_aglar": attempted
+    }
 
 
 def extract_json_array_from_llm(text: str) -> List[Dict[str, Any]]:
-    """LLM metin çıktısından JSON dizisini ayıklar."""
+    """
+    LLM metin çıktısından JSON dizisini toleranslı ve çok katmanlı olarak ayıklar.
+    <think>...</think> bloklarını temizler, markdown kod bloklarını soyar,
+    tek tırnakları (Python dict) ve regex ile bireysel nesneleri çözer.
+    """
     if not text:
         return []
-    cleaned = text.strip()
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     if "```json" in cleaned:
         cleaned = cleaned.split("```json")[1].split("```")[0].strip()
     elif "```" in cleaned:
@@ -1180,28 +1263,59 @@ def extract_json_array_from_llm(text: str) -> List[Dict[str, Any]]:
 
     start_idx = cleaned.find("[")
     end_idx = cleaned.rfind("]")
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        cleaned = cleaned[start_idx:end_idx + 1]
+    raw_arr = cleaned[start_idx:end_idx + 1] if (start_idx != -1 and end_idx != -1 and end_idx > start_idx) else cleaned
 
+    # 1. Standart JSON denemesi
     try:
-        data = json.loads(cleaned)
+        data = json.loads(raw_arr)
         if isinstance(data, list):
             return data
     except Exception:
         pass
-    return []
+
+    # 2. Python ast.literal_eval denemesi (tek tırnak ve None/null)
+    try:
+        import ast
+        eval_safe = raw_arr.replace("null", "None").replace("true", "True").replace("false", "False")
+        data = ast.literal_eval(eval_safe)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        pass
+
+    # 3. Regex ile tekil {"a": ..., "b": ...} nesnelerini kurtarma
+    obj_pattern = re.compile(r"\{[^{}]*\}")
+    results = []
+    for match in obj_pattern.finditer(cleaned):
+        s = match.group(0)
+        try:
+            o = json.loads(s)
+            if isinstance(o, dict) and "a" in o:
+                results.append(o)
+                continue
+        except Exception:
+            pass
+        try:
+            import ast
+            o = ast.literal_eval(s.replace("null", "None").replace("true", "True").replace("false", "False"))
+            if isinstance(o, dict) and "a" in o:
+                results.append(o)
+        except Exception:
+            pass
+
+    return results
 
 
 def shortlist_candidates_for_batch(
     items_a_batch: List[str],
     candidates_b: List[str],
-    top_k: int = 6,
-    max_total: int = 60
+    top_k: int = 3,
+    max_total: int = 24
 ) -> List[str]:
     """
-    Her batch'e TÜM B listesini göndermek yerine (büyük listelerde prompt devasa olur ve
-    50 sn içinde yanıt gelmez), her A maddesi için yerel benzerlikle en yakın top_k B adayını seçer.
-    Birleşik aday listesi max_total ile sınırlandırılır -> prompt küçük, yanıt hızlı kalır.
+    Her batch'e TÜM B listesini göndermek yerine, her A maddesi için yerel benzerlikle
+    en yakın top_k B adayını seçer. Birleşik aday listesi max_total (önerilen: 24) ile
+    sınırlandırılır -> prompt küçük kalır, LLM yanıt süresi 10 sn'nin altına iner ve zaman aşımı önlenir.
     """
     unique_b = list(dict.fromkeys([clean_text_content(b) for b in candidates_b if clean_text_content(b)]))
     if len(unique_b) <= max_total:
@@ -1220,36 +1334,39 @@ def shortlist_candidates_for_batch(
 
 
 def compare_items_with_aselix_batch(
-    base_url: str,
-    api_key: str,
-    model: str,
-    items_a_batch: List[str],
-    candidates_b: List[str],
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    items_a_batch: Optional[List[str]] = None,
+    candidates_b: Optional[List[str]] = None,
     threshold: float = 0.8,
-    timeout: int = 50
+    timeout: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    1 dakikalık (timeout=50sn) zaman aşımı limitini kesinlikle aşmayacak şekilde
-    küçük bir batch (10-20 kayıt) için AselixAI API'si üzerinden anlamsal kıyaslama yapar.
-
-    - B listesi her A maddesi için en yakın adaylara daraltılır (shortlist).
-    - LLM'den metin yerine NUMARA (indeks) döndürmesi istenir -> eşleşmeler orijinal metne birebir bağlanır.
-    - Her yanıtta tanılama (diagnostics) bilgisi döner: süre, kaynak, hata, aday sayısı vb.
+    AselixAI API'si üzerinden anlamsal kıyaslama yapar.
+    - Süre ve ağ güvenliği: 90 sn esnek zaman aşımı, Milli Ağ / Aynet otomatik geçiş.
+    - Prompt optimizasyonu: Adaylar top-3 ile odaklanır, AselixAI jet hızında döner.
+    - Hata/zaman aşımı durumunda yerel ML ile emniyetli kurtarma (fallback).
     """
     t0 = time.time()
-    clean_batch = [clean_text_content(x) for x in items_a_batch if clean_text_content(x)]
+    clean_batch = [clean_text_content(x) for x in (items_a_batch or []) if clean_text_content(x)]
     clean_batch = list(dict.fromkeys(clean_batch))
+    clean_cands = [clean_text_content(b) for b in (candidates_b or []) if clean_text_content(b)]
+
+    eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(base_url, api_key, model, timeout)
 
     def _diag(extra: Dict[str, Any]) -> Dict[str, Any]:
         base = {
             "a_sayisi": len(clean_batch),
-            "b_aday_sayisi": len(candidates_b),
+            "b_aday_sayisi": len(clean_cands),
             "sure_sn": round(time.time() - t0, 2),
+            "aktif_url": eff_url,
+            "has_api_key": bool(eff_key)
         }
         base.update(extra)
         return base
 
-    if not clean_batch or not candidates_b:
+    if not clean_batch or not clean_cands:
         return {
             "durum": "basarili",
             "matched_pairs": [],
@@ -1259,17 +1376,17 @@ def compare_items_with_aselix_batch(
         }
 
     # API Key yoksa yerel fuzzy matching kullan
-    if not api_key or not api_key.strip():
-        local_res = compute_fuzzy_venn(clean_batch, candidates_b, threshold=threshold)
+    if not eff_key:
+        local_res = compute_fuzzy_venn(clean_batch, clean_cands, threshold=threshold)
         return {
             "durum": "basarili",
             "matched_pairs": local_res["matched_pairs"],
             "unmatched_a": local_res["only_a_items"],
             "kaynak": "yerel_ml",
-            "tanilama": _diag({"not": "API anahtarı yok, yerel ML kullanıldı."})
+            "tanilama": _diag({"not": "API anahtarı bulunamadı, yerel ML kullanıldı."})
         }
 
-    shortlist = shortlist_candidates_for_batch(clean_batch, candidates_b)
+    shortlist = shortlist_candidates_for_batch(clean_batch, clean_cands, top_k=3, max_total=24)
 
     list_a_text = "\n".join([f"A{i+1}. {item}" for i, item in enumerate(clean_batch)])
     list_b_text = "\n".join([f"B{j+1}. {cand}" for j, cand in enumerate(shortlist)])
@@ -1291,21 +1408,21 @@ def compare_items_with_aselix_batch(
     )
 
     chat_res = call_aselix_chat(
-        base_url=base_url,
-        api_key=api_key,
-        model=model or "aselix-llm-v1",
+        base_url=eff_url,
+        api_key=eff_key,
+        model=eff_model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
         temperature=0.1,
-        timeout=timeout  # 1 dakikayı kesinlikle aşmayacak (50sn)
+        timeout=eff_timeout
     )
     api_sure = round(time.time() - t0, 2)
 
     if chat_res.get("durum") != "basarili":
         # API zaman aşımı veya bağlantı hatası -> bu batch için yerel fuzzy distance ile kurtar
-        local_res = compute_fuzzy_venn(clean_batch, candidates_b, threshold=threshold)
+        local_res = compute_fuzzy_venn(clean_batch, clean_cands, threshold=threshold)
         return {
             "durum": "uyari",
             "api_hatasi": chat_res.get("mesaj"),
@@ -1317,7 +1434,8 @@ def compare_items_with_aselix_batch(
                 "prompt_karakter": len(user_prompt),
                 "api_sure_sn": api_sure,
                 "api_durum": chat_res.get("durum"),
-                "hata_kodu": chat_res.get("hata_kodu")
+                "hata_kodu": chat_res.get("hata_kodu"),
+                "denenen_aglar": chat_res.get("denenen_aglar")
             })
         }
 
@@ -1712,7 +1830,7 @@ def call_aselix_embeddings(
     if not clean_texts:
         return {"durum": "basarili", "kaynak": "bos", "embeddings": [], "model": model}
 
-    auth_token = (api_key or "").strip() or (jwt_token or "").strip() or (KOKPIT_IDENTITY_STORE.get("jwt_token") or "").strip()
+    auth_token = (api_key or "").strip() or (jwt_token or "").strip() or os.getenv("ASELIX_API_KEY", "").strip() or (KOKPIT_IDENTITY_STORE.get("jwt_token") or "").strip()
     if auth_token and base_url:
         url = f"{base_url.rstrip('/')}/embeddings"
         headers = {
@@ -3499,6 +3617,7 @@ try:
         messages: List[Dict[str, str]]
         temperature: Optional[float] = 0.2
         context: Optional[Dict[str, Any]] = None
+        timeout_sec: Optional[int] = 90
 
     class BatchChunkRequest(BaseModel):
         base_url: Optional[str] = "https://api.aselixai.aselsan.com.tr/v1"
@@ -3509,7 +3628,7 @@ try:
         items_a_batch: List[str]
         candidates_b: List[str]
         threshold: Optional[float] = 0.8
-        timeout_sec: Optional[int] = 50
+        timeout_sec: Optional[int] = 90
 
     class BatchFinalizeRequest(BaseModel):
         base_url: Optional[str] = "https://api.aselixai.aselsan.com.tr/v1"
@@ -3524,6 +3643,7 @@ try:
         all_items_b: List[str]
         matched_pairs: List[Dict[str, Any]]
         need_executive_summary: bool = True
+        timeout_sec: Optional[int] = 90
         meta_1: Optional[Dict[str, Any]] = None
         meta_2: Optional[Dict[str, Any]] = None
 
@@ -4212,17 +4332,79 @@ try:
                 "mesaj": f"Excel dosyası okunamadı: {str(e)}"
             }
 
+    @web_app.get("/api/aselix/config")
+    def api_aselix_config():
+        """
+        AselixAI için sunucu tarafındaki etkin yapılandırmayı döndürür.
+        Frontend, localStorage boş olsa dahi .env anahtarını ve varsayılanları kullanabilir.
+        """
+        eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config()
+        return {
+            "durum": "basarili",
+            "has_server_api_key": bool(eff_key),
+            "default_base_url": eff_url,
+            "default_model": eff_model,
+            "default_timeout": eff_timeout,
+            "default_batch_size": int(os.getenv("ASELIX_BATCH_SIZE", "8")),
+            "milli_url": ASELIX_MILLI_BASE_URL,
+            "aynet_url": ASELIX_AYNET_BASE_URL
+        }
+
+    @web_app.post("/api/aselix/test-connection")
+    def api_aselix_test_connection(req: Optional[AselixModelsRequest] = None):
+        """
+        AselixAI API bağlantı ve canlılık durumunu test eder.
+        Hem Milli Ağ hem Aynet uç noktalarını dener ve latency/erişim durumunu döndürür.
+        """
+        target_url = (req.base_url if req and req.base_url else None)
+        target_key = (req.api_key if req and req.api_key else None)
+        eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(target_url, target_key)
+
+        t0 = time.time()
+        models_res = fetch_aselix_models(base_url=eff_url, api_key=eff_key)
+        latency_ms = round((time.time() - t0) * 1000, 1)
+
+        chat_ping = None
+        if models_res.get("durum") == "basarili" and eff_key:
+            t1 = time.time()
+            chat_res = call_aselix_chat(
+                base_url=models_res.get("base_url") or eff_url,
+                api_key=eff_key,
+                model=eff_model,
+                messages=[{"role": "user", "content": "Merhaba! Bağlantı teyidi. 1 cümle ile yanıtla."}],
+                temperature=0.0,
+                timeout=18
+            )
+            chat_latency = round((time.time() - t1) * 1000, 1)
+            chat_ping = {
+                "durum": chat_res.get("durum"),
+                "cevap": (chat_res.get("cevap") or "")[:120],
+                "latency_ms": chat_latency,
+                "aktif_ag": chat_res.get("aktif_ag")
+            }
+
+        return {
+            "durum": "basarili" if models_res.get("durum") == "basarili" else "uyari",
+            "aktif_url": models_res.get("base_url", eff_url),
+            "aktif_ag": models_res.get("aktif_ag", "bilinmiyor"),
+            "has_api_key": bool(eff_key),
+            "latency_ms": latency_ms,
+            "modeller": models_res.get("modeller", []),
+            "model_mesaj": models_res.get("mesaj"),
+            "chat_ping": chat_ping
+        }
+
     @web_app.post("/api/aselix/models")
-    async def api_aselix_models(req: AselixModelsRequest):
-        """Aselsan AselixAI API'sinden (GET /models) mevcut modelleri çeker."""
+    def api_aselix_models(req: AselixModelsRequest):
+        """Aselsan AselixAI API'sinden (GET /models) mevcut modelleri çeker (Threadpool güvenli senkron def)."""
         return fetch_aselix_models(
-            base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
+            base_url=req.base_url,
             api_key=req.api_key
         )
 
     @web_app.post("/api/aselix/chat")
-    async def api_aselix_chat(req: AselixChatRequest):
-        """Aselsan AselixAI (POST /chat/completions) üzerinden sohbet ve analiz yanıtı üretir."""
+    def api_aselix_chat(req: AselixChatRequest):
+        """Aselsan AselixAI (POST /chat/completions) üzerinden sohbet ve analiz yanıtı üretir (Threadpool güvenli senkron def)."""
         msgs = []
         if req.context:
             ctx_info = (
@@ -4242,15 +4424,17 @@ try:
                 )
             })
 
-        for m in req.messages:
-            msgs.append(m)
+        for m in (req.messages or []):
+            if isinstance(m, dict) and "content" in m:
+                msgs.append(m)
 
         return call_aselix_chat(
-            base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
+            base_url=req.base_url,
             api_key=req.api_key,
-            model=req.model or "aselix-llm-v1",
+            model=req.model,
             messages=msgs,
-            temperature=req.temperature or 0.2
+            temperature=req.temperature or 0.2,
+            timeout=req.timeout_sec or None
         )
 
     @web_app.post("/api/compare/run")
@@ -4335,24 +4519,25 @@ try:
 
         ai_summary = ""
         ai_durum = "kapali"
-        effective_key = (api_key or "").strip() or (KOKPIT_IDENTITY_STORE.get("jwt_token") or "").strip()
+        eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(base_url, api_key, model)
+        effective_key = eff_key
 
         if engine_mode == "aselix" and effective_key:
-            # 1 Dakikalık zaman aşımını aşmamak için 15'lik batch'ler halinde AselixAI'ye gönder
-            batch_size = 15
+            # AselixAI için güvenli ve hızlı batch boyutu (varsayılan: 8)
+            batch_size = int(os.getenv("ASELIX_BATCH_SIZE", "8"))
             all_matched_pairs = []
             used_b = set()
 
             for i in range(0, len(items_1), batch_size):
                 chunk_a = items_1[i:i + batch_size]
                 chunk_res = compare_items_with_aselix_batch(
-                    base_url=base_url or "https://api.aselixai.aselsan.com.tr/v1",
+                    base_url=eff_url,
                     api_key=effective_key,
-                    model=model or "aselix-llm-v1",
+                    model=eff_model,
                     items_a_batch=chunk_a,
                     candidates_b=items_2,
                     threshold=threshold,
-                    timeout=50  # 1 dakikayı kesinlikle aşmayacak koruma
+                    timeout=eff_timeout
                 )
                 for p in chunk_res.get("matched_pairs", []):
                     if p["item_b"] not in used_b:
@@ -4421,15 +4606,15 @@ try:
                 f"Yanıtını profesyonel, maddeler halinde ve yönetici özeti şeklinde yapılandır."
             )
             chat_res = call_aselix_chat(
-                base_url=base_url or "https://api.aselixai.aselsan.com.tr/v1",
+                base_url=eff_url,
                 api_key=effective_key,
-                model=model or "aselix-llm-v1",
+                model=eff_model,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg}
                 ],
                 temperature=0.2,
-                timeout=50  # 1 dakikayı kesinlikle aşmayacak koruma
+                timeout=eff_timeout
             )
             if chat_res.get("durum") == "basarili":
                 ai_summary = chat_res.get("cevap", "")
@@ -4547,20 +4732,19 @@ try:
     @web_app.post("/api/compare/batch-chunk")
     def api_compare_batch_chunk(req: BatchChunkRequest):
         """
-        1 dakikalık zaman aşımını aşmayacak şekilde tek bir batch (10-20 satır) için
         AselixAI anlamsal kıyaslama isteği yürütür.
-        Senkron 'def' -> FastAPI threadpool'da çalışır, bloklayan HTTP çağrısı sunucuyu dondurmaz.
+        Zaman aşımı korumalı ve threadpool güvenlidir.
         """
         t_start = time.time()
         _safe_log(f"[BATCH {req.batch_index}/{req.total_batches}] Başladı: {len(req.items_a_batch)} A satırı, {len(req.candidates_b)} B adayı")
         res = compare_items_with_aselix_batch(
-            base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
+            base_url=req.base_url,
             api_key=req.api_key,
-            model=req.model or "aselix-llm-v1",
+            model=req.model,
             items_a_batch=req.items_a_batch,
             candidates_b=req.candidates_b,
             threshold=req.threshold or 0.8,
-            timeout=req.timeout_sec or 50
+            timeout=req.timeout_sec or 90
         )
         elapsed = round(time.time() - t_start, 2)
         res["batch_index"] = req.batch_index
@@ -4655,15 +4839,15 @@ try:
                 "Kısa, net ve yönetici özeti şeklinde yapılandır."
             )
             chat_res = call_aselix_chat(
-                base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
+                base_url=req.base_url,
                 api_key=req.api_key,
-                model=req.model or "aselix-llm-v1",
+                model=req.model,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg}
                 ],
                 temperature=0.2,
-                timeout=50  # 1 dakikayı kesinlikle aşmayacak koruma
+                timeout=req.timeout_sec or 90
             )
             if chat_res.get("durum") == "basarili":
                 ai_summary = chat_res.get("cevap", "")

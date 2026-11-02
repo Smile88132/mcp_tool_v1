@@ -25,12 +25,15 @@
     embeddingModel: 'text-embedding-3-small',
     engine: 'local', // 'local', 'embedding', or 'aselix'
     threshold: 80,   // %50 - %100
-    batchSize: 15,   // 10, 15, 20 satırlık güvenli batch boyutu
+    batchSize: 8,    // 8 satır: AselixAI'den 8-10 sn'de hızlı ve zaman aşımı korumalı yanıt için önerilen
+    timeoutSec: 90,  // 90 sn güvenlik limiti
     inputMode: 'excel', // 'excel' or 'paste'
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS.join(', ')
   };
 
   let appConfig = loadConfig();
+  let serverConfig = null; // /api/aselix/config üzerinden çekilen sunucu durumu
+  let chatHistory = [];    // Chat asistanı için çok turlu konuşma geçmişi
   let file1 = null;
   let file2 = null;
   let previewData1 = null;
@@ -234,6 +237,9 @@
   const chatInput = document.getElementById('chatInput');
   const btnSendChat = document.getElementById('btnSendChat');
   const btnClearChat = document.getElementById('btnClearChat');
+  const btnTestChatConn = document.getElementById('btnTestChatConn');
+  const chatNetworkBadge = document.getElementById('chatNetworkBadge');
+  const chatConnStatusBanner = document.getElementById('chatConnStatusBanner');
 
   // Settings Modal & Admin-Only Elements
   const btnOpenSettings = document.getElementById('btnOpenSettings');
@@ -250,6 +256,8 @@
   const btnToggleApiKey = document.getElementById('btnToggleApiKey');
   const cfgModelSelect = document.getElementById('cfgModelSelect');
   const cfgBatchSize = document.getElementById('cfgBatchSize');
+  const cfgTimeoutSec = document.getElementById('cfgTimeoutSec');
+  const serverApiKeyDetectedBadge = document.getElementById('serverApiKeyDetectedBadge');
   const cfgEmbeddingModel = document.getElementById('cfgEmbeddingModel');
   const fetchModelsStatus = document.getElementById('fetchModelsStatus');
   const testConnResult = document.getElementById('testConnResult');
@@ -313,6 +321,7 @@
   // --------------------------------------------------------------------------
   function init() {
     initTheme();
+    loadServerConfig();
     applyConfigToUI();
     applyAdminVisibility();
     setupEventListeners();
@@ -677,6 +686,7 @@
 
     // Chat
     btnSendChat.addEventListener('click', handleSendChatMessage);
+    if (btnTestChatConn) btnTestChatConn.addEventListener('click', testChatConnection);
     chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -684,6 +694,7 @@
       }
     });
     btnClearChat.addEventListener('click', () => {
+      chatHistory = [];
       chatMessages.innerHTML = `
         <div class="chat-msg bot-msg">
           <div class="msg-avatar">🤖</div>
@@ -812,9 +823,13 @@
     // Settings modal inputs
     cfgBaseUrl.value = appConfig.baseUrl || NETWORK_URLS.milli;
     cfgApiKey.value = appConfig.apiKey || '';
-    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 15);
+    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 8);
+    if (cfgTimeoutSec) cfgTimeoutSec.value = String(appConfig.timeoutSec || 90);
     if (cfgEmbeddingModel) cfgEmbeddingModel.value = appConfig.embeddingModel || 'text-embedding-3-small';
     if (cfgAllowedOrigins) cfgAllowedOrigins.value = appConfig.allowedOrigins || DEFAULT_ALLOWED_ORIGINS.join(', ');
+    if (chatNetworkBadge) {
+      chatNetworkBadge.textContent = appConfig.network === 'aynet' ? 'Aynet Ağı' : (appConfig.network === 'custom' ? 'Özel Ağ' : 'Milli Ağ (Otomatik)');
+    }
 
     if (appConfig.network === 'aynet') {
       radioAynet.checked = true;
@@ -1139,9 +1154,12 @@
   }
 
   // --------------------------------------------------------------------------
-  // AselixAI Batch Pipeline (her istek < 1 dk, canlı log ile)
+  // AselixAI Batch Pipeline (canlı log, zaman aşımı emniyeti ve çift ağ toleranslı)
   // --------------------------------------------------------------------------
-  const REQUEST_HARD_LIMIT_MS = 58000; // Tarayıcı tarafı güvenlik: 58 sn'de isteği iptal et
+  function getRequestHardLimitMs() {
+    const sec = (appConfig && appConfig.timeoutSec) ? parseInt(appConfig.timeoutSec, 10) : 90;
+    return Math.max(30, sec + 15) * 1000;
+  }
 
   function setProgress(pct) {
     const p = Math.max(0, Math.min(100, Math.round(pct)));
@@ -1180,10 +1198,12 @@
   async function fetchWithLimit(url, options, liveLabel) {
     const controller = new AbortController();
     const t0 = Date.now();
-    const timer = setTimeout(() => controller.abort(), REQUEST_HARD_LIMIT_MS);
+    const hardLimitMs = getRequestHardLimitMs();
+    const limitSec = Math.round(hardLimitMs / 1000);
+    const timer = setTimeout(() => controller.abort(), hardLimitMs);
     const ticker = setInterval(() => {
       const sec = Math.round((Date.now() - t0) / 1000);
-      progressSubText.textContent = `${liveLabel} • Geçen süre: ${sec} sn / limit 50 sn`;
+      progressSubText.textContent = `${liveLabel} • Geçen süre: ${sec} sn / limit ${limitSec} sn`;
     }, 1000);
     try {
       const resp = await fetch(url, { ...options, signal: controller.signal });
@@ -1199,7 +1219,7 @@
       return { data, elapsed: (Date.now() - t0) / 1000 };
     } catch (err) {
       if (err.name === 'AbortError') {
-        throw new Error(`İstek ${REQUEST_HARD_LIMIT_MS / 1000} sn içinde tamamlanmadı ve iptal edildi.`);
+        throw new Error(`İstek ${limitSec} sn içinde tamamlanmadı ve iptal edildi.`);
       }
       throw err;
     } finally {
@@ -1272,7 +1292,7 @@
             items_a_batch: chunk,
             candidates_b: itemsB.filter(b => !usedB.has(b)),
             threshold: thresholdDec,
-            timeout_sec: 50,
+            timeout_sec: appConfig.timeoutSec || 90,
             batch_index: i + 1,
             total_batches: total
           })
@@ -1305,7 +1325,7 @@
 
     batchLog(`Batch'ler tamamlandı: ${aiOk} AI, ${fallbackCount} yerel yedek, ${failCount} hatalı. Toplam ${allPairs.length} eşleşme.`, failCount ? 'warn' : 'ok');
 
-    // 3) Birleştir + yönetici özeti (ayrı istek, < 1 dk)
+    // 3) Birleştir + yönetici özeti (ayrı istek)
     setProgress(88);
     progressStatusText.textContent = 'Sonuçlar birleştiriliyor ve yönetici özeti üretiliyor...';
     let finalData;
@@ -1318,6 +1338,7 @@
           api_key: appConfig.apiKey,
           model,
           threshold: thresholdDec,
+          timeout_sec: appConfig.timeoutSec || 90,
           all_items_a: itemsA,
           all_items_b: itemsB,
           matched_pairs: allPairs,
@@ -1385,17 +1406,18 @@
     const isEmbedding = appConfig.engine === 'embedding';
     const batchSize = parseInt(appConfig.batchSize, 10) || 15;
     const effectiveApiKey = (appConfig.apiKey || '').trim() || (kokpitIdentity.token || '').trim();
+    const hasEffectiveKey = Boolean(effectiveApiKey || (serverConfig && serverConfig.has_server_api_key));
 
     // AselixAI modu: Excel VE metin için istemci tarafında gerçek batch döngüsü.
-    // Her istek ayrı bir HTTP çağrısıdır -> hiçbir istek 1 dakikayı aşmaz.
+    // Parçalı istekler ile AselixAI'den hızlı dönüş alınır.
     if (isAselix) {
-      if (!effectiveApiKey) {
+      if (!hasEffectiveKey) {
         progressBanner.style.display = 'none';
         btnRunComparison.disabled = false;
         if (isCurrentUserAdmin()) {
-          alert('AselixAI modu için Ayarlar\'dan API anahtarı girmelisiniz veya Kokpit SSO Token ile oturum açmalısınız (veya Yerel ML / Embedding moduna geçin).');
+          alert('AselixAI modu için Ayarlar\'dan API anahtarı girmelisiniz, Kokpit SSO Token ile oturum açmalısınız veya sunucu .env dosyasında ASELIX_API_KEY tanımlamalısınız.');
         } else {
-          alert('AselixAI bulut analizi için sistem yöneticisi tarafından API bağlantısı tanımlanmalıdır veya Kokpit SSO ile oturum açılmalıdır. Lütfen Yerel ML veya Vektör Embedding modunu kullanın.');
+          alert('AselixAI bulut analizi için sistem yöneticisi tarafından API bağlantısı tanımlanmalıdır (.env veya Kokpit SSO). Lütfen Yerel ML veya Vektör Embedding modunu kullanın.');
         }
         return;
       }
@@ -2055,8 +2077,9 @@
     const msg = chatInput.value.trim();
     if (!msg) return;
 
-    // Append user message
+    // Append user message & track multi-turn history
     appendChatMessage('user', msg);
+    chatHistory.push({ role: 'user', content: msg });
     chatInput.value = '';
     btnSendChat.disabled = true;
 
@@ -2083,10 +2106,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           base_url: appConfig.baseUrl,
-          api_key: appConfig.apiKey,
+          api_key: (appConfig.apiKey || '').trim() || (kokpitIdentity.token || '').trim(),
           model: appConfig.model || 'aselix-llm-v1',
-          messages: [{ role: 'user', content: msg }],
+          messages: chatHistory,
           temperature: 0.2,
+          timeout_sec: appConfig.timeoutSec || 90,
           context: contextObj
         })
       });
@@ -2096,7 +2120,14 @@
       btnSendChat.disabled = false;
 
       if (data.durum === 'basarili') {
+        chatHistory.push({ role: 'assistant', content: data.cevap });
         appendChatMessage('bot', data.cevap);
+        if (data.aktif_ag && chatNetworkBadge) {
+          const netLabel = data.aktif_ag.toUpperCase();
+          chatNetworkBadge.textContent = `${netLabel} (${data.gecen_sure_sn || 0}sn)`;
+          chatNetworkBadge.style.color = '#059669';
+          chatNetworkBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+        }
       } else {
         const fallbackErrMsg = isCurrentUserAdmin()
           ? 'Cevap üretilemedi. Lütfen Ayarlar menüsünden API anahtarınızı ve ağ seçiminizi kontrol edin.'
@@ -2110,6 +2141,60 @@
       removeTypingIndicator(typingId);
       btnSendChat.disabled = false;
       appendChatMessage('bot', `⚠️ Bağlantı hatası: ${err.message}`);
+    }
+  }
+
+  async function testChatConnection() {
+    if (!btnTestChatConn || !chatConnStatusBanner) return;
+    btnTestChatConn.disabled = true;
+    btnTestChatConn.textContent = '⏳ Test Ediliyor...';
+    chatConnStatusBanner.style.display = 'block';
+    chatConnStatusBanner.style.background = 'rgba(59, 130, 246, 0.12)';
+    chatConnStatusBanner.style.border = '1px solid rgba(59, 130, 246, 0.3)';
+    chatConnStatusBanner.style.color = '#2563eb';
+    chatConnStatusBanner.innerHTML = `<strong>🔄 AselixAI Bağlantı ve Canlılık Testi Başlatıldı...</strong><br>Milli Ağ ve Aynet uç noktaları sorgulanıyor.`;
+
+    try {
+      const resp = await fetch('/api/aselix/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_url: appConfig.baseUrl,
+          api_key: (appConfig.apiKey || '').trim() || (kokpitIdentity.token || '').trim()
+        })
+      });
+      const data = await resp.json();
+      btnTestChatConn.disabled = false;
+      btnTestChatConn.textContent = '⚡ Canlılık Testi';
+
+      if (data.durum === 'basarili') {
+        const netName = (data.aktif_ag || 'milli').toUpperCase();
+        if (chatNetworkBadge) {
+          chatNetworkBadge.textContent = `${netName} Aktif (${data.latency_ms}ms)`;
+          chatNetworkBadge.style.color = '#059669';
+          chatNetworkBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+        }
+        let pingInfo = '';
+        if (data.chat_ping && data.chat_ping.durum === 'basarili') {
+          pingInfo = `<br>💬 <em>AselixAI Yanıtı (${data.chat_ping.latency_ms}ms):</em> "${escapeHtml(data.chat_ping.cevap)}"`;
+        }
+        chatConnStatusBanner.style.background = 'rgba(16, 185, 129, 0.15)';
+        chatConnStatusBanner.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+        chatConnStatusBanner.style.color = '#059669';
+        chatConnStatusBanner.innerHTML = `<strong>✓ AselixAI Canlı ve Hazır!</strong> [Ağ: ${netName}, Gecikme: ${data.latency_ms} ms]${pingInfo}`;
+      } else {
+        chatConnStatusBanner.style.background = 'rgba(239, 68, 68, 0.12)';
+        chatConnStatusBanner.style.border = '1px solid rgba(239, 68, 68, 0.35)';
+        chatConnStatusBanner.style.color = '#dc2626';
+        chatConnStatusBanner.innerHTML = `<strong>⚠️ AselixAI Uyarısı:</strong> ${escapeHtml(data.model_mesaj || 'Sunucuya ulaşılamadı.')}<br><small>ASELSAN VPN/Ağ geçişini kontrol edin veya Ayarlar'dan API anahtarı ekleyin.</small>`;
+      }
+    } catch (e) {
+      btnTestChatConn.disabled = false;
+      btnTestChatConn.textContent = '⚡ Canlılık Testi';
+      chatConnStatusBanner.style.background = 'rgba(239, 68, 68, 0.12)';
+      chatConnStatusBanner.style.border = '1px solid rgba(239, 68, 68, 0.35)';
+      chatConnStatusBanner.style.color = '#dc2626';
+      chatConnStatusBanner.innerHTML = `<strong>⚠️ Test Hatası:</strong> ${escapeHtml(e.message)}`;
     }
   }
 
@@ -2156,7 +2241,11 @@
     }
     cfgBaseUrl.value = appConfig.baseUrl || NETWORK_URLS.milli;
     cfgApiKey.value = appConfig.apiKey || '';
-    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 15);
+    if (cfgBatchSize) cfgBatchSize.value = String(appConfig.batchSize || 8);
+    if (cfgTimeoutSec) cfgTimeoutSec.value = String(appConfig.timeoutSec || 90);
+    if (serverApiKeyDetectedBadge) {
+      serverApiKeyDetectedBadge.style.display = (serverConfig && serverConfig.has_server_api_key) ? 'block' : 'none';
+    }
 
     if (appConfig.network === 'aynet') radioAynet.checked = true;
     else if (appConfig.network === 'custom') radioCustom.checked = true;
@@ -2180,12 +2269,36 @@
     appConfig.baseUrl = cfgBaseUrl.value.trim() || NETWORK_URLS.milli;
     appConfig.apiKey = cfgApiKey.value.trim();
     appConfig.model = cfgModelSelect.value || 'aselix-llm-v1';
-    if (cfgBatchSize) appConfig.batchSize = parseInt(cfgBatchSize.value, 10) || 15;
+    if (cfgBatchSize) appConfig.batchSize = parseInt(cfgBatchSize.value, 10) || 8;
+    if (cfgTimeoutSec) appConfig.timeoutSec = parseInt(cfgTimeoutSec.value, 10) || 90;
     if (cfgEmbeddingModel) appConfig.embeddingModel = cfgEmbeddingModel.value.trim() || 'text-embedding-3-small';
 
     saveConfig();
     applyConfigToUI();
     closeSettingsModal();
+  }
+
+  async function loadServerConfig() {
+    try {
+      const resp = await fetch('/api/aselix/config');
+      if (resp.ok) {
+        serverConfig = await resp.json();
+        if (serverConfig.has_server_api_key && serverApiKeyDetectedBadge) {
+          serverApiKeyDetectedBadge.style.display = 'block';
+        }
+        if (serverConfig.default_timeout && !appConfig.timeoutSec) {
+          appConfig.timeoutSec = serverConfig.default_timeout;
+        }
+        if (serverConfig.default_batch_size && !appConfig.batchSize) {
+          appConfig.batchSize = serverConfig.default_batch_size;
+        }
+        if (chatNetworkBadge && serverConfig.aktif_ag) {
+          chatNetworkBadge.textContent = serverConfig.aktif_ag.toUpperCase();
+        }
+      }
+    } catch (e) {
+      console.warn('Server config fetch warning:', e);
+    }
   }
 
   // --------------------------------------------------------------------------

@@ -5,6 +5,7 @@ Unit tests for new two-Excel comparison and flow logic.
 import json
 import os
 import unittest
+from unittest import mock
 import pandas as pd
 from app import execute_compare_two_excels, compare_two_excels_venn, extract_langflow_response
 
@@ -647,6 +648,133 @@ class TestKokpitIdentityAndEmbedding(unittest.TestCase):
         self.assertEqual(pdata["tespit_edilen_bakiye"]["sd"], first_grp["sd"])
         self.assertEqual(pdata["tespit_edilen_bakiye"]["kalem"], first_grp["kalem"])
         self.assertEqual(pdata["tespit_edilen_bakiye"]["proje_adi"], first_grp["proje_adi"])
+
+
+class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import app
+        self.client = TestClient(app.web_app)
+
+    def test_get_effective_aselix_config(self):
+        import app
+        # 1. Varsayılanlar
+        with mock.patch.dict(os.environ, {"ASELIX_API_KEY": "", "ASELIX_BASE_URL": "", "ASELIX_TIMEOUT": ""}, clear=True):
+            eff_url, eff_key, eff_model, eff_timeout = app.get_effective_aselix_config()
+            self.assertEqual(eff_url, "https://api.aselixai.aselsan.com.tr/v1")
+            self.assertEqual(eff_model, "aselix-llm-v1")
+            self.assertEqual(eff_timeout, 90)
+
+        # 2. .env önceliği
+        with mock.patch.dict(os.environ, {
+            "ASELIX_API_KEY": "env-secret-key",
+            "ASELIX_BASE_URL": "https://agate.aselsan.com.tr/send/milli/api.aselixai/v1",
+            "ASELIX_TIMEOUT": "120"
+        }):
+            eff_url, eff_key, eff_model, eff_timeout = app.get_effective_aselix_config()
+            self.assertEqual(eff_key, "env-secret-key")
+            self.assertIn("agate.aselsan.com.tr", eff_url)
+            self.assertEqual(eff_timeout, 120)
+
+        # 3. Parametre önceliği (ortam değişkenini ezer)
+        with mock.patch.dict(os.environ, {"ASELIX_API_KEY": "env-secret-key"}):
+            _, eff_key, _, _ = app.get_effective_aselix_config(api_key="direct-param-key")
+            self.assertEqual(eff_key, "direct-param-key")
+
+    def test_extract_json_array_resilience(self):
+        import app
+        # A) Standard JSON
+        txt1 = '[{"a": 1, "b": 2, "similarity": 95}]'
+        self.assertEqual(len(app.extract_json_array_from_llm(txt1)), 1)
+
+        # B) LLM with <think> tag and markdown block
+        txt2 = """<think>
+        Düşünce: 1. madde 3. madde ile eşleşiyor.
+        </think>
+        İşte eşleştirme sonucu:
+        ```json
+        [
+          {"a": 1, "b": 3, "similarity": 90},
+          {"a": 2, "b": null, "similarity": 0}
+        ]
+        ```
+        """
+        arr2 = app.extract_json_array_from_llm(txt2)
+        self.assertEqual(len(arr2), 2)
+        self.assertEqual(arr2[0]["b"], 3)
+
+        # C) Python literal eval single quotes
+        txt3 = "[{'a': 1, 'b': 2, 'similarity': 88}, {'a': 2, 'b': None, 'similarity': 0}]"
+        arr3 = app.extract_json_array_from_llm(txt3)
+        self.assertEqual(len(arr3), 2)
+
+        # D) Regex object recovery when brackets are broken
+        txt4 = 'Analiz tamamlandı: {"a": 1, "b": 2, "similarity": 85} ve ayrıca {"a": 2, "b": 3, "similarity": 90}'
+        arr4 = app.extract_json_array_from_llm(txt4)
+        self.assertEqual(len(arr4), 2)
+
+    def test_call_aselix_chat_dual_network_failover(self):
+        import app
+        call_urls = []
+
+        def mock_post(url, *args, **kwargs):
+            call_urls.append(url)
+            # Birincil (Milli Ağ) zaman aşımı versin
+            if "api.aselixai.aselsan.com.tr" in url:
+                import requests
+                raise requests.exceptions.Timeout("Milli Ağ Gateway Timeout")
+            # İkincil (Aynet) başarılı dönsün
+            resp = mock.MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"choices": [{"message": {"content": "Aynet üzerinden selamlar"}}]}
+            return resp
+
+        with mock.patch("requests.post", side_effect=mock_post):
+            res = app.call_aselix_chat(
+                base_url="https://api.aselixai.aselsan.com.tr/v1",
+                api_key="test-key",
+                messages=[{"role": "user", "content": "test"}]
+            )
+            self.assertEqual(res["durum"], "basarili")
+            self.assertEqual(res["aktif_ag"], "aynet")
+            self.assertEqual(res["cevap"], "Aynet üzerinden selamlar")
+            # Hem Milli Ağ hem Aynet çağrılmış olmalı
+            self.assertTrue(any("api.aselixai" in u for u in call_urls))
+            self.assertTrue(any("agate.aselsan" in u for u in call_urls))
+
+    def test_aselix_config_and_test_connection_endpoints(self):
+        # 1. /api/aselix/config
+        with mock.patch.dict(os.environ, {"ASELIX_API_KEY": "dummy-key", "ASELIX_TIMEOUT": "90"}):
+            res = self.client.get("/api/aselix/config")
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(data["durum"], "basarili")
+            self.assertTrue(data["has_server_api_key"])
+            self.assertEqual(data["default_timeout"], 90)
+            self.assertEqual(data["default_batch_size"], 8)
+
+        # 2. /api/aselix/test-connection
+        with mock.patch("app.fetch_aselix_models", return_value={"durum": "basarili", "base_url": "https://api.aselixai.aselsan.com.tr/v1", "aktif_ag": "milli", "modeller": ["aselix-llm-v1"]}):
+            with mock.patch("app.call_aselix_chat", return_value={"durum": "basarili", "cevap": "Canlıyım", "aktif_ag": "milli"}):
+                conn_res = self.client.post("/api/aselix/test-connection", json={"api_key": "k"})
+                self.assertEqual(conn_res.status_code, 200)
+                cdata = conn_res.json()
+                self.assertEqual(cdata["durum"], "basarili")
+                self.assertEqual(cdata["aktif_ag"], "milli")
+                self.assertIsNotNone(cdata["chat_ping"])
+
+    def test_api_aselix_chat_multi_turn(self):
+        with mock.patch("app.call_aselix_chat", return_value={"durum": "basarili", "cevap": "Sohbet cevabı", "aktif_ag": "milli"}):
+            chat_res = self.client.post("/api/aselix/chat", json={
+                "messages": [
+                    {"role": "user", "content": "İlk soru"},
+                    {"role": "assistant", "content": "İlk cevap"},
+                    {"role": "user", "content": "İkinci soru"}
+                ],
+                "timeout_sec": 90
+            })
+            self.assertEqual(chat_res.status_code, 200)
+            self.assertEqual(chat_res.json()["cevap"], "Sohbet cevabı")
 
 
 if __name__ == "__main__":

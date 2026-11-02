@@ -1020,13 +1020,20 @@
             </div>
             <div>
               <h3>ASELSAN AselixAI Chat Asistanı</h3>
-              <p class="panel-meta">Seçili Model: <span id="chatModelNameDisplay">aselix-llm-v1</span></p>
+              <p class="panel-meta">Seçili Model: <span id="chatModelNameDisplay">aselix-llm-v1</span> • <span id="chatNetworkBadge" class="badge-network" style="display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 600; border-radius: 12px; background: rgba(59, 130, 246, 0.15); color: #2563eb;">Milli Ağ / Aynet Otomatik</span></p>
             </div>
           </div>
-          <button class="btn btn-ghost btn-sm" id="btnClearChat" title="Sohbeti Temizle">
-            Temizle
-          </button>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-secondary btn-sm" id="btnTestChatConn" title="AselixAI Bağlantısını ve Canlılığını Test Et">
+              ⚡ Canlılık Testi
+            </button>
+            <button class="btn btn-ghost btn-sm" id="btnClearChat" title="Sohbeti Temizle">
+              Temizle
+            </button>
+          </div>
         </div>
+
+        <div id="chatConnStatusBanner" style="display: none; padding: 10px 14px; margin: 10px 16px; border-radius: 8px; font-size: 12px; line-height: 1.4;"></div>
 
         <!-- Suggestion Question Chips -->
         <div class="chat-chips-bar">
@@ -1423,7 +1430,8 @@
             <input type="password" id="cfgApiKey" class="form-input" placeholder="AselixAI API Anahtarınızı girin...">
             <button class="btn btn-secondary btn-sm" id="btnToggleApiKey">Göster</button>
           </div>
-          <small class="form-help">API anahtarı yalnızca tarayıcınızın yerel depolama alanında (localStorage) güvenle saklanır.</small>
+          <small class="form-help">API anahtarı tarayıcınızın yerel depolama alanında (localStorage) güvenle saklanır.</small>
+          <div id="serverApiKeyDetectedBadge" style="display: none; color: #059669; font-weight: 500; font-size: 11px; margin-top: 4px;">✓ Sunucu .env dosyasında API anahtarı tanımlı (Boş bıraksanız dahi çalışır).</div>
         </div>
 
         <!-- Model Selection & Fetch Button -->
@@ -1444,15 +1452,22 @@
           <div id="fetchModelsStatus" style="display: none; margin-top: 8px; font-size: 12px; padding: 6px 10px; border-radius: 6px;"></div>
         </div>
 
-        <!-- Batch Size & 1-Minute Timeout Protection Group -->
+        <!-- Batch Size & Timeout Protection Group -->
         <div class="form-group">
-          <label for="cfgBatchSize">API Kıyaslama Batch Boyutu (1 Dakika Zaman Aşımı Koruması):</label>
+          <label for="cfgBatchSize">API Kıyaslama Batch Boyutu:</label>
           <select id="cfgBatchSize" class="form-select">
-            <option value="10">10 Kayıt / Batch (~10-20 sn - En Hızlı &amp; Güvenli)</option>
-            <option value="15" selected>15 Kayıt / Batch (~15-30 sn - Önerilen)</option>
-            <option value="20">20 Kayıt / Batch (~25-45 sn)</option>
+            <option value="8" selected>8 Kayıt / Batch (~6-12 sn - Önerilen &amp; Hızlı Yanıt)</option>
+            <option value="10">10 Kayıt / Batch (~10-18 sn - Dengeli)</option>
+            <option value="15">15 Kayıt / Batch (~18-35 sn)</option>
+            <option value="20">20 Kayıt / Batch (~30-55 sn)</option>
           </select>
-          <small class="form-help">API çağrılarının 1 dakikalık ağ zaman aşımına uğramaması için talepler bu boyutta parçalanarak iletilir.</small>
+          <small class="form-help">AselixAI'nin zaman aşımına uğramadan hızlı dönmesi için satırlar bu gruplarla parçalanır.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="cfgTimeoutSec">İstek Zaman Aşımı Sınırı (Saniye):</label>
+          <input type="number" id="cfgTimeoutSec" class="form-input" min="30" max="180" value="90">
+          <small class="form-help">Varsayılan 90 sn. Çift ağ otomatik geçiş etkindir: Milli Ağ ulaşılamazsa Aynet otomatik denenir.</small>
         </div>
 
         <div class="form-group">
