@@ -1119,13 +1119,17 @@
     progressSubText.textContent = 'Dry-run ve SKT fazları karşılaştırma verisi hazırlanıyor...';
 
     try {
+      const effectiveApiKey = (appConfig.apiKey || '').trim() || (kokpitIdentity.token || '').trim();
       const resp = await fetch('/api/flow/sample-compare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          base_url: appConfig.baseUrl,
+          base_url: appConfig.baseUrl || 'https://api.aselixai.aselsan.com.tr/v1',
           flow_id: 'c16ecc83-ff64-4fc7-bb52-0f594beaf70a',
-          api_key: appConfig.apiKey
+          api_key: effectiveApiKey,
+          engine_mode: appConfig.engine,
+          threshold: (appConfig.threshold || 80) / 100.0,
+          model: appConfig.model || 'aselix-llm-v1'
         })
       });
 
@@ -1232,6 +1236,7 @@
     resetBatchLog();
     setProgress(2);
     const model = appConfig.model || 'aselix-llm-v1';
+    const effectiveApiKey = (appConfig.apiKey || '').trim() || (kokpitIdentity.token || '').trim();
 
     // 1) Verileri hazırla
     let itemsA = [], itemsB = [], doc1 = '1. Metin Seti', doc2 = '2. Metin Seti', col1 = 'Metin', col2 = 'Metin';
@@ -1317,7 +1322,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             base_url: appConfig.baseUrl,
-            api_key: appConfig.apiKey,
+            api_key: effectiveApiKey,
             model,
             items_a_batch: chunk,
             candidates_b: itemsB.filter(b => !usedB.has(b)),
@@ -1365,7 +1370,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           base_url: appConfig.baseUrl,
-          api_key: appConfig.apiKey,
+          api_key: effectiveApiKey,
           model,
           threshold: thresholdDec,
           timeout_sec: appConfig.timeoutSec || 90,

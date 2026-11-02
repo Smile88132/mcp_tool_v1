@@ -892,147 +892,6 @@ def extract_langflow_response(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
 
 
-def call_aselsan_llm_suite_flow(
-    base_url: str = "https://llmsuiteflow.aiplatform.aselsan.com.tr",
-    flow_id: str = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a",
-    api_key: Optional[str] = None,
-    tweaks_input: str = "ChatInput-jugL4",
-    uploaded_files: Optional[List[Tuple[str, bytes]]] = None,
-    prompt_text: str = "",
-    session_id: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    ASELSAN AI Platform LLM Suite Flow API'sini çağırır.
-    Dosyaları upload endpoint'ine yükler ve flow çalıştırma isteği yapar.
-    """
-    if not base_url:
-        base_url = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
-    base_url = base_url.rstrip("/")
-
-    if not flow_id:
-        flow_id = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
-
-    headers = {}
-    if api_key and str(api_key).strip():
-        headers["x-api-key"] = str(api_key).strip()
-
-    uploaded_file_paths = []
-
-    if headers and uploaded_files:
-        upload_url = f"{base_url}/api/v1/files/upload/{flow_id}"
-        for fname, fbytes in uploaded_files:
-            try:
-                files_data = {
-                    "file": (
-                        fname,
-                        io.BytesIO(fbytes),
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                }
-                up_resp = requests.post(upload_url, headers=headers, files=files_data, timeout=25, verify=False)
-                if up_resp.status_code in [200, 201]:
-                    up_json = up_resp.json()
-                    fpath = up_json.get("file_path") or up_json.get("path") or up_json.get("name")
-                    if fpath:
-                        uploaded_file_paths.append(fpath)
-            except Exception:
-                pass
-
-    if not session_id:
-        session_id = str(uuid.uuid4())
-
-    payload = {
-        "output_type": "chat",
-        "input_type": "chat",
-        "input_value": prompt_text,
-        "session_id": session_id
-    }
-
-    # Yalnızca dosya upload başarılı olduysa tweaks ekle, asla input_value'yu boş bırakma!
-    if uploaded_file_paths and tweaks_input and str(tweaks_input).strip():
-        payload["tweaks"] = {
-            tweaks_input.strip(): {
-                "files": uploaded_file_paths,
-                "input_value": prompt_text
-            }
-        }
-
-    run_url = f"{base_url}/api/v1/run/{flow_id}?stream=false"
-    req_headers = {"Content-Type": "application/json", **headers}
-
-    if not headers:
-        current_user = KOKPIT_IDENTITY_STORE.get("current_user")
-        is_admin = is_kokpit_user_admin(current_user) if "is_kokpit_user_admin" in globals() else False
-        if is_admin:
-            return {
-                "durum": "bilgi",
-                "session_id": session_id,
-                "cevap": (
-                    "### 📌 Matematiksel Venn Şeması ve Küme Analizi Hazır!\n\n"
-                    "İki Excel dosyasındaki uygunsuzluklar başarıyla karşılaştırıldı ve görsel Venn şeması oluşturuldu.\n\n"
-                    "**ASELSAN LLM Suite Flow Bağlantısı (Yönetici Bilgisi):**\n"
-                    f"- **Hedef Akış:** `{base_url}/api/v1/run/{flow_id}`\n\n"
-                    "Akıllı yapay zeka yorumu, kök neden analizi ve risk sınıflandırmasını almak için sağ üst köşedeki "
-                    "**⚙️ Ayarlar** butonuna tıklayarak **API Key (x-api-key)** bilginizi kaydedebilirsiniz."
-                )
-            }
-        return {
-            "durum": "bilgi",
-            "session_id": session_id,
-            "cevap": (
-                "### 📌 Matematiksel Venn Şeması ve Küme Analizi Hazır!\n\n"
-                "İki Excel dosyasındaki uygunsuzluklar başarıyla karşılaştırıldı ve görsel Venn şeması oluşturuldu."
-            )
-        }
-
-    try:
-        resp = requests.post(run_url, headers=req_headers, json=payload, timeout=180, verify=False)
-        
-        # 400 hatası alındıysa ve tweaks varsa, tweaks olmadan (saf prompt ile) tekrar dene
-        if resp.status_code == 400 and "tweaks" in payload:
-            clean_payload = {
-                "output_type": "chat",
-                "input_type": "chat",
-                "input_value": prompt_text,
-                "session_id": session_id
-            }
-            resp = requests.post(run_url, headers=req_headers, json=clean_payload, timeout=180, verify=False)
-
-        if resp.status_code >= 400:
-            err_detail = ""
-            try:
-                err_json = resp.json()
-                err_detail = err_json.get("detail") or err_json.get("message") or json.dumps(err_json, ensure_ascii=False)
-            except Exception:
-                err_detail = resp.text
-            return {
-                "durum": "hata",
-                "mesaj": f"ASELSAN LLM Suite Flow hatası ({resp.status_code}): {err_detail}",
-                "session_id": session_id
-            }
-
-        res_json = resp.json()
-        extracted_text = extract_langflow_response(res_json)
-        return {
-            "durum": "basarili",
-            "session_id": session_id,
-            "cevap": extracted_text,
-            "raw": res_json
-        }
-    except requests.exceptions.RequestException as req_err:
-        err_msg = str(req_err)
-        if hasattr(req_err, "response") and req_err.response is not None:
-            try:
-                err_msg += f" - Detay: {req_err.response.text}"
-            except Exception:
-                pass
-        return {
-            "durum": "hata",
-            "mesaj": f"ASELSAN LLM Suite Flow bağlantı hatası: {err_msg}",
-            "session_id": session_id
-        }
-
-
 ASELIX_MILLI_BASE_URL = "https://api.aselixai.aselsan.com.tr/v1"
 ASELIX_AYNET_BASE_URL = "https://agate.aselsan.com.tr/send/milli/api.aselixai/v1"
 
@@ -1245,6 +1104,197 @@ def call_aselix_chat(
         "toplam_gecen_sure_sn": total_elapsed,
         "denenen_aglar": attempted
     }
+
+
+def call_aselsan_llm_suite_flow(
+    base_url: str = "https://llmsuiteflow.aiplatform.aselsan.com.tr",
+    flow_id: str = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a",
+    api_key: Optional[str] = None,
+    tweaks_input: str = "ChatInput-jugL4",
+    uploaded_files: Optional[List[Tuple[str, bytes]]] = None,
+    prompt_text: str = "",
+    session_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    ASELSAN AI Platform LLM Suite Flow veya AselixAI API'sini çağırır.
+    Eğer AselixAI uç noktası (api.aselixai veya agate.aselsan) hedeflenmişse veya genel kıyaslama yapılıyorsa
+    isteği doğrudan güvenli AselixAI Chat motoruna yönlendirir.
+    """
+    target_base = (base_url or "").strip()
+    is_aselix = bool(
+        "aselix" in target_base.lower()
+        or "agate.aselsan" in target_base.lower()
+        or not target_base
+        or "llmsuiteflow" not in target_base.lower()
+    )
+
+    if is_aselix:
+        eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(base_url, api_key)
+        if not eff_key:
+            current_user = KOKPIT_IDENTITY_STORE.get("current_user")
+            is_admin = is_kokpit_user_admin(current_user) if "is_kokpit_user_admin" in globals() else False
+            if is_admin:
+                return {
+                    "durum": "bilgi",
+                    "session_id": session_id or str(uuid.uuid4()),
+                    "cevap": (
+                        "### 📌 Matematiksel Venn Şeması ve Küme Analizi Hazır!\n\n"
+                        "İki Excel dosyasındaki uygunsuzluklar başarıyla karşılaştırıldı ve görsel Venn şeması oluşturuldu.\n\n"
+                        "**ASELSAN LLM Suite Flow Bağlantısı (Yönetici Bilgisi):**\n"
+                        f"- **Hedef Akış:** `{eff_url}/api/v1/run/{flow_id}`\n\n"
+                        "Akıllı yapay zeka yorumu, kök neden analizi ve risk sınıflandırmasını almak için sağ üst köşedeki "
+                        "**⚙️ Ayarlar** butonuna tıklayarak **API Key (x-api-key)** bilginizi kaydedebilirsiniz."
+                    )
+                }
+            return {
+                "durum": "bilgi",
+                "session_id": session_id or str(uuid.uuid4()),
+                "cevap": (
+                    "### 📌 Matematiksel Venn Şeması ve Küme Analizi Hazır!\n\n"
+                    "Uygunsuzluklar başarıyla karşılaştırıldı ve görsel Venn şeması oluşturuldu.\n\n"
+                    "Akıllı yapay zeka yorumu ve yönetici özeti almak için sağ üst köşedeki "
+                    "**⚙️ Ayarlar** menüsünden **AselixAI API Anahtarı** tanımlayabilir veya `.env` dosyasında `ASELIX_API_KEY` belirtebilirsiniz."
+                )
+            }
+        chat_res = call_aselix_chat(
+            base_url=eff_url,
+            api_key=eff_key,
+            model=eff_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Sen ASELSAN sistem ve kalite güvence mühendisliği konusunda uzman kıdemli bir yapay zeka analiz asistanısın. İki test fazı veya veri seti arasındaki uygunsuzlukları kıyaslar, kök neden analizi yapar ve yönetici özeti sunarsın."
+                },
+                {"role": "user", "content": prompt_text}
+            ],
+            temperature=0.2,
+            timeout=eff_timeout
+        )
+        if chat_res.get("durum") == "basarili":
+            return {
+                "durum": "basarili",
+                "session_id": session_id or str(uuid.uuid4()),
+                "cevap": chat_res.get("cevap", ""),
+                "raw": chat_res
+            }
+        return {
+            "durum": "hata",
+            "mesaj": f"AselixAI API Uyarısı: {chat_res.get('mesaj', '')}",
+            "session_id": session_id or str(uuid.uuid4())
+        }
+
+    # Eski Langflow LLM Suite Akışı (llmsuiteflow.aiplatform.aselsan.com.tr)
+    clean_base = target_base.rstrip("/")
+    if not flow_id:
+        flow_id = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
+
+    effective_api_key = api_key or os.getenv("ASELIX_API_KEY") or os.getenv("ASELSAN_FLOW_API_KEY")
+    headers = {}
+    if effective_api_key and str(effective_api_key).strip():
+        k = str(effective_api_key).strip()
+        headers["x-api-key"] = k
+        headers["Authorization"] = f"Bearer {k}"
+        headers["apikey"] = k
+
+    if not headers:
+        return {
+            "durum": "bilgi",
+            "session_id": session_id or str(uuid.uuid4()),
+            "cevap": (
+                "### 📌 Matematiksel Venn Şeması ve Küme Analizi Hazır!\n\n"
+                "İki Excel dosyasındaki uygunsuzluklar başarıyla karşılaştırıldı ve görsel Venn şeması oluşturuldu.\n\n"
+                "Akıllı yapay zeka yorumu ve yönetici özeti almak için sağ üst köşedeki "
+                "**⚙️ Ayarlar** bölümünden API anahtarınızı tanımlayabilirsiniz."
+            )
+        }
+
+    uploaded_file_paths = []
+    if uploaded_files:
+        upload_url = f"{clean_base}/api/v1/files/upload/{flow_id}"
+        for fname, fbytes in uploaded_files:
+            try:
+                files_data = {
+                    "file": (
+                        fname,
+                        io.BytesIO(fbytes),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                }
+                up_resp = requests.post(upload_url, headers=headers, files=files_data, timeout=25, verify=False)
+                if up_resp.status_code in [200, 201]:
+                    up_json = up_resp.json()
+                    fpath = up_json.get("file_path") or up_json.get("path") or up_json.get("name")
+                    if fpath:
+                        uploaded_file_paths.append(fpath)
+            except Exception:
+                pass
+
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
+    payload = {
+        "output_type": "chat",
+        "input_type": "chat",
+        "input_value": prompt_text,
+        "session_id": session_id
+    }
+
+    if uploaded_file_paths and tweaks_input and str(tweaks_input).strip():
+        payload["tweaks"] = {
+            tweaks_input.strip(): {
+                "files": uploaded_file_paths,
+                "input_value": prompt_text
+            }
+        }
+
+    run_url = f"{clean_base}/api/v1/run/{flow_id}?stream=false"
+    req_headers = {"Content-Type": "application/json", **headers}
+
+    try:
+        resp = requests.post(run_url, headers=req_headers, json=payload, timeout=180, verify=False)
+        
+        if resp.status_code == 400 and "tweaks" in payload:
+            clean_payload = {
+                "output_type": "chat",
+                "input_type": "chat",
+                "input_value": prompt_text,
+                "session_id": session_id
+            }
+            resp = requests.post(run_url, headers=req_headers, json=clean_payload, timeout=180, verify=False)
+
+        if resp.status_code >= 400:
+            err_detail = ""
+            try:
+                err_json = resp.json()
+                err_detail = err_json.get("detail") or err_json.get("message") or json.dumps(err_json, ensure_ascii=False)
+            except Exception:
+                err_detail = resp.text
+            return {
+                "durum": "hata",
+                "mesaj": f"ASELSAN LLM Suite Flow hatası ({resp.status_code}): {err_detail}",
+                "session_id": session_id
+            }
+
+        res_json = resp.json()
+        extracted_text = extract_langflow_response(res_json)
+        return {
+            "durum": "basarili",
+            "session_id": session_id,
+            "cevap": extracted_text,
+            "raw": res_json
+        }
+    except requests.exceptions.RequestException as req_err:
+        err_msg = str(req_err)
+        if hasattr(req_err, "response") and req_err.response is not None:
+            try:
+                err_msg += f" - Detay: {req_err.response.text}"
+            except Exception:
+                pass
+        return {
+            "durum": "hata",
+            "mesaj": f"ASELSAN LLM Suite Flow bağlantı hatası: {err_msg}",
+            "session_id": session_id
+        }
 
 
 def extract_json_array_from_llm(text: str) -> List[Dict[str, Any]]:
@@ -3735,17 +3785,21 @@ try:
     class FlowChatRequest(BaseModel):
         message: str
         session_id: Optional[str] = None
-        base_url: Optional[str] = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
+        base_url: Optional[str] = "https://api.aselixai.aselsan.com.tr/v1"
         flow_id: Optional[str] = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
         api_key: Optional[str] = ""
         tweaks_input: Optional[str] = ""
         context: Optional[Dict[str, Any]] = None
+        model: Optional[str] = "aselix-llm-v1"
 
     class SampleCompareRequest(BaseModel):
-        base_url: Optional[str] = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
+        base_url: Optional[str] = "https://api.aselixai.aselsan.com.tr/v1"
         flow_id: Optional[str] = "c16ecc83-ff64-4fc7-bb52-0f594beaf70a"
         api_key: Optional[str] = ""
         tweaks_input: Optional[str] = ""
+        engine_mode: Optional[str] = "local"
+        threshold: Optional[float] = 0.8
+        model: Optional[str] = "aselix-llm-v1"
 
     class TestConnectionRequest(BaseModel):
         base_url: Optional[str] = "https://llmsuiteflow.aiplatform.aselsan.com.tr"
@@ -4336,16 +4390,19 @@ try:
         )
 
         flow_res = call_aselsan_llm_suite_flow(
-            base_url=req.base_url or "https://llmsuiteflow.aiplatform.aselsan.com.tr",
+            base_url=req.base_url or "https://api.aselixai.aselsan.com.tr/v1",
             flow_id=req.flow_id or "c16ecc83-ff64-4fc7-bb52-0f594beaf70a",
             api_key=req.api_key,
             tweaks_input=req.tweaks_input or "ChatInput-jugL4",
             prompt_text=prompt
         )
 
+        _, eff_key, eff_model, _ = get_effective_aselix_config(req.base_url, req.api_key, req.model)
         comp_res["flow_analiz_ozeti"] = flow_res.get("cevap") or flow_res.get("mesaj") or ""
         comp_res["session_id"] = flow_res.get("session_id")
         comp_res["flow_durum"] = flow_res.get("durum")
+        comp_res["engine_mode"] = "aselix" if eff_key else (req.engine_mode or "local")
+        comp_res["model_kullanilan"] = eff_model
         return comp_res
 
     @web_app.post("/api/flow/chat")
@@ -4989,7 +5046,9 @@ try:
         ai_summary = ""
         ai_durum = "kapali"
 
-        if req.need_executive_summary and req.api_key and req.api_key.strip():
+        eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(req.base_url, req.api_key, req.model, req.timeout_sec)
+
+        if req.need_executive_summary and eff_key:
             sample_common = "\n- ".join(venn_res["intersection_items"][:10]) or "Yok"
             sample_only_b = "\n- ".join(venn_res["only_b_items"][:8]) or "Yok"
             sample_only_a = "\n- ".join(venn_res["only_a_items"][:8]) or "Yok"
@@ -5016,15 +5075,15 @@ try:
                 "Kısa, net ve yönetici özeti şeklinde yapılandır."
             )
             chat_res = call_aselix_chat(
-                base_url=req.base_url,
-                api_key=req.api_key,
-                model=req.model,
+                base_url=eff_url,
+                api_key=eff_key,
+                model=eff_model,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": user_msg}
                 ],
                 temperature=0.2,
-                timeout=req.timeout_sec or 90
+                timeout=eff_timeout
             )
             if chat_res.get("durum") == "basarili":
                 ai_summary = chat_res.get("cevap", "")
@@ -5032,6 +5091,14 @@ try:
             else:
                 ai_summary = f"AselixAI API Uyarısı: {chat_res.get('mesaj', '')}"
                 ai_durum = "uyari"
+        elif req.need_executive_summary and not eff_key:
+            ai_summary = (
+                "### 📌 Matematiksel Venn Şeması ve Küme Analizi Hazır!\n\n"
+                f"Toplam {total_unique} benzersiz uygunsuzluk başarıyla karşılaştırıldı ve küme dağılımı çıkarıldı.\n\n"
+                "AselixAI anlamsal kök neden analizi ve risk özeti almak için sağ üst köşedeki "
+                "**⚙️ Ayarlar** bölümünden geçerli bir AselixAI API Anahtarı girebilir veya `.env` dosyasına `ASELIX_API_KEY` ekleyebilirsiniz."
+            )
+            ai_durum = "bilgi"
 
         parsed_meta_1 = parse_bakiye_meta(req.meta_1)
         parsed_meta_2 = parse_bakiye_meta(req.meta_2)

@@ -834,6 +834,20 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
             self.assertEqual(chat_res.status_code, 200)
             self.assertEqual(chat_res.json()["cevap"], "Sohbet cevabı")
 
+    def test_sample_compare_delegates_to_aselix_without_401_error(self):
+        # AselixAI yapılandırmasıyla /api/flow/sample-compare çağrıldığında
+        # 401 hatası vermek yerine call_aselix_chat ile başarılı analiz döndürmeli
+        with mock.patch("app.call_aselix_chat", return_value={"durum": "basarili", "cevap": "AselixAI Kök Neden Analizi Başarılı"}):
+            res = self.client.post("/api/flow/sample-compare", json={
+                "base_url": "https://api.aselixai.aselsan.com.tr/v1",
+                "api_key": "test-aselix-token"
+            })
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(data["durum"], "basarili")
+            self.assertEqual(data["engine_mode"], "aselix")
+            self.assertEqual(data["flow_analiz_ozeti"], "AselixAI Kök Neden Analizi Başarılı")
+
 
 if __name__ == "__main__":
     unittest.main()
