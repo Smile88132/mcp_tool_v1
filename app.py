@@ -976,18 +976,20 @@ def get_effective_aselix_config(
     return eff_url, eff_key, eff_model, eff_timeout
 
 
-def fetch_aselix_models(base_url: Optional[str] = None, api_key: Optional[str] = None) -> Dict[str, Any]:
+def fetch_aselix_models(base_url: Optional[str] = None, api_key: Optional[str] = None, allow_fallback_network: bool = False) -> Dict[str, Any]:
     """
     ASELSAN AselixAI REST API üzerinden mevcut modelleri listeler (GET /models).
-    Hem Milli Ağ hem Aynet ile uyumludur; birincil ağ yanıt vermezse otomatik alternatif denenir.
+    Kullanıcı talebi doğrultusunda SADECE MİLLİ AĞ (https://api.aselixai.aselsan.com.tr/v1) kullanılır.
     """
-    eff_url, eff_key, _, _ = get_effective_aselix_config(base_url, api_key, timeout=12)
+    eff_url, eff_key, _, _ = get_effective_aselix_config(base_url, api_key, timeout=8)
 
+    # SADECE MİLLİ AĞ (Varsayılan): Sadece açıkça allow_fallback_network=True verilirse Aynet denenir
     candidate_urls = [eff_url]
-    if "api.aselixai.aselsan.com.tr" in eff_url:
-        candidate_urls.append(ASELIX_AYNET_BASE_URL)
-    elif "agate.aselsan.com.tr" in eff_url:
-        candidate_urls.append(ASELIX_MILLI_BASE_URL)
+    if allow_fallback_network:
+        if "api.aselixai.aselsan.com.tr" in eff_url:
+            candidate_urls.append(ASELIX_AYNET_BASE_URL)
+        elif "agate.aselsan.com.tr" in eff_url:
+            candidate_urls.append(ASELIX_MILLI_BASE_URL)
 
     fallback_models = [
         "openai/gpt-oss-120b",
@@ -1061,20 +1063,19 @@ def call_aselix_chat(
     messages: Optional[List[Dict[str, str]]] = None,
     temperature: float = 0.2,
     timeout: Optional[int] = None,
-    allow_fallback_network: bool = True
+    allow_fallback_network: bool = False
 ) -> Dict[str, Any]:
     """
     ASELSAN AselixAI POST /chat/completions endpointine OpenAI uyumlu istek gönderir.
-    - Zaman aşımı korumalıdır (varsayılan 90 sn, .env ASELIX_TIMEOUT ile esnetilebilir).
-    - Çift ağ otomatik geçiş (Milli Ağ <-> Aynet): Birincil uç nokta timeout veya bağlantı hatası verirse
-      otomatik olarak alternatif ağ denenir.
-    - .env API anahtarını ve Kokpit SSO tokenini otomatik tanır.
+    Kullanıcı talebi doğrultusunda SADECE MİLLİ AĞ (https://api.aselixai.aselsan.com.tr/v1) kullanılır.
+    Aynet / Apigee geçidi denenmez.
     """
     eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(base_url, api_key, model, timeout)
     if not is_chat_llm_model(eff_model):
         eff_model = "openai/gpt-oss-120b"
     t_start = time.time()
 
+    # SADECE MİLLİ AĞ (Varsayılan): Sadece açıkça allow_fallback_network=True verilirse Aynet denenir
     candidate_urls = [eff_url]
     if allow_fallback_network:
         if "api.aselixai.aselsan.com.tr" in eff_url:
@@ -2238,12 +2239,15 @@ def call_aselix_embeddings(
             "Authorization": f"Bearer {auth_token}",
             "x-api-key": auth_token
         }
+        eff_emb_model = model or "bge-m3"
+        if "text-embedding" in eff_emb_model.lower():
+            eff_emb_model = "bge-m3"
         payload = {
-            "model": model or "text-embedding-3-small",
+            "model": eff_emb_model,
             "input": clean_texts
         }
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=timeout, verify=False)
+            resp = requests.post(url, headers=headers, json=payload, timeout=min(timeout or 8, 8), verify=False)
             if resp.status_code == 200:
                 data = resp.json()
                 emb_list = []

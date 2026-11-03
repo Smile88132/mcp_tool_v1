@@ -764,10 +764,22 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
             return resp
 
         with mock.patch("requests.post", side_effect=mock_post):
-            res = app.call_aselix_chat(
+            # 1. Varsayılan (Sadece Milli Ağ): Aynet denenmemeli
+            res_milli_only = app.call_aselix_chat(
                 base_url="https://api.aselixai.aselsan.com.tr/v1",
                 api_key="test-key",
                 messages=[{"role": "user", "content": "test"}]
+            )
+            self.assertEqual(res_milli_only["durum"], "zaman_asimi")
+            self.assertFalse(any("agate.aselsan" in u for u in call_urls))
+
+            # 2. Açıkça allow_fallback_network=True verildiğinde failover çalışmalı
+            call_urls.clear()
+            res = app.call_aselix_chat(
+                base_url="https://api.aselixai.aselsan.com.tr/v1",
+                api_key="test-key",
+                messages=[{"role": "user", "content": "test"}],
+                allow_fallback_network=True
             )
             self.assertEqual(res["durum"], "basarili")
             self.assertEqual(res["aktif_ag"], "aynet")

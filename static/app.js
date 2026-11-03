@@ -64,7 +64,7 @@
     baseUrl: 'https://api.aselixai.aselsan.com.tr/v1',
     apiKey: '',
     model: 'openai/gpt-oss-120b',
-    embeddingModel: 'text-embedding-3-small',
+    embeddingModel: 'bge-m3',
     engine: 'local', // 'local', 'embedding', or 'aselix'
     threshold: 80,   // %50 - %100
     batchSize: 5,    // 5 satır: Benzerlik kümelemeli ve AselixAI'den 3-5 sn'de ultra hızlı yanıt için önerilen
@@ -103,6 +103,12 @@
     // Görsel üretim (FLUX vb.) veya geçersiz modelleri temizle, varsayılan LLM modeline çek
     if (!cfg.model || !isChatLlmModel(cfg.model) || cfg.model === 'aselix-llm-v1') {
       cfg.model = 'openai/gpt-oss-120b';
+    }
+    // Sadece Milli Ağ: Ağ ve base url'i Milli Ağ'a sabitle
+    cfg.network = 'milli';
+    cfg.baseUrl = 'https://api.aselixai.aselsan.com.tr/v1';
+    if (!cfg.embeddingModel || cfg.embeddingModel === 'text-embedding-3-small') {
+      cfg.embeddingModel = 'bge-m3';
     }
     return cfg;
   }
@@ -2370,17 +2376,17 @@
   }
 
   function saveSettingsFromModal() {
-    let network = 'milli';
-    if (radioAynet.checked) network = 'aynet';
-    else if (radioCustom.checked) network = 'custom';
-
-    appConfig.network = network;
-    appConfig.baseUrl = cfgBaseUrl.value.trim() || NETWORK_URLS.milli;
+    appConfig.network = 'milli';
+    appConfig.baseUrl = 'https://api.aselixai.aselsan.com.tr/v1';
     appConfig.apiKey = cfgApiKey.value.trim();
     appConfig.model = cfgModelSelect.value || 'openai/gpt-oss-120b';
     if (cfgBatchSize) appConfig.batchSize = parseInt(cfgBatchSize.value, 10) || 5;
     if (cfgTimeoutSec) appConfig.timeoutSec = parseInt(cfgTimeoutSec.value, 10) || 90;
-    if (cfgEmbeddingModel) appConfig.embeddingModel = cfgEmbeddingModel.value.trim() || 'text-embedding-3-small';
+    let embModel = cfgEmbeddingModel ? cfgEmbeddingModel.value.trim() : 'bge-m3';
+    if (!embModel || embModel === 'text-embedding-3-small') {
+      embModel = 'bge-m3';
+    }
+    appConfig.embeddingModel = embModel;
 
     saveConfig();
     applyConfigToUI();
@@ -3115,10 +3121,11 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          base_url: cfgBaseUrl.value.trim(),
+          base_url: cfgBaseUrl.value.trim() || 'https://api.aselixai.aselsan.com.tr/v1',
           api_key: cfgApiKey.value.trim(),
           model: cfgModelSelect.value || 'openai/gpt-oss-120b',
-          messages: [{ role: 'user', content: 'Merhaba, bağlantı testi. 1 cümle ile teyit et.' }]
+          messages: [{ role: 'user', content: 'Merhaba, bağlantı testi. 1 cümle ile teyit et.' }],
+          timeout_sec: 8
         })
       });
 

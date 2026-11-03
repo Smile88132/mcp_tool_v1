@@ -1391,32 +1391,31 @@
 
         <!-- Network Selection Radios -->
         <div class="form-group">
-          <label class="form-group-label">Ağ / Uç Nokta Seçimi:</label>
+          <label class="form-group-label">Ağ / Uç Nokta Seçimi (Milli Ağ):</label>
           <div class="network-radio-group">
-            <label class="radio-card">
+            <label class="radio-card active">
               <input type="radio" name="networkChoice" value="milli" checked id="radioMilli">
               <div class="radio-content">
-                <span class="radio-title">🌐 Milli Ağ (Varsayılan)</span>
+                <span class="radio-title">🌐 ASELSAN Milli Ağ (Aktif &amp; Sabit)</span>
                 <span class="radio-url">https://api.aselixai.aselsan.com.tr/v1</span>
               </div>
             </label>
-
-            <label class="radio-card">
-              <input type="radio" name="networkChoice" value="aynet" id="radioAynet">
+            <label class="radio-card" style="display: none;">
+              <input type="radio" name="networkChoice" value="aynet" id="radioAynet" disabled>
               <div class="radio-content">
                 <span class="radio-title">🏢 Aynet Ağı</span>
                 <span class="radio-url">https://agate.aselsan.com.tr/send/milli/api.aselixai/v1</span>
               </div>
             </label>
-
-            <label class="radio-card">
-              <input type="radio" name="networkChoice" value="custom" id="radioCustom">
+            <label class="radio-card" style="display: none;">
+              <input type="radio" name="networkChoice" value="custom" id="radioCustom" disabled>
               <div class="radio-content">
                 <span class="radio-title">⚙️ Özel / Harici URL</span>
                 <span class="radio-url">Özel base url adresi girin</span>
               </div>
             </label>
           </div>
+          <small class="form-help">Sistem doğrudan ASELSAN Milli Ağı (https://api.aselixai.aselsan.com.tr/v1) üzerinden çalışmaya sabitlenmiştir.</small>
         </div>
 
         <div class="form-group" id="groupCustomBaseUrl">
@@ -1468,14 +1467,14 @@
 
         <div class="form-group">
           <label for="cfgTimeoutSec">İstek Zaman Aşımı Sınırı (Saniye):</label>
-          <input type="number" id="cfgTimeoutSec" class="form-input" min="30" max="180" value="90">
-          <small class="form-help">Varsayılan 90 sn. Çift ağ otomatik geçiş etkindir: Milli Ağ ulaşılamazsa Aynet otomatik denenir.</small>
+          <input type="number" id="cfgTimeoutSec" class="form-input" min="5" max="180" value="90">
+          <small class="form-help">Varsayılan 90 sn (Test butonu için otomatik 8 sn korumalı). İstekler doğrudan Milli Ağ uç noktasına iletilir.</small>
         </div>
 
         <div class="form-group">
           <label for="cfgEmbeddingModel">Vektör Embedding Modeli:</label>
-          <input type="text" id="cfgEmbeddingModel" class="form-input" value="text-embedding-3-small" placeholder="Örn: text-embedding-3-small, bge-m3, aselix-embed-v1">
-          <small class="form-help">Embedding modunda API /embeddings uç noktasına iletilecek model adı (Çevrimdışıysa yerel N-Gram vektör uzayı kullanılır).</small>
+          <input type="text" id="cfgEmbeddingModel" class="form-input" value="bge-m3" placeholder="Örn: bge-m3, aselix-embed-v1">
+          <small class="form-help">Embedding modunda ASELSAN kümesindeki model adı (Örn: bge-m3). OpenAI modelleri (text-embedding-3-small) milli ağda bulunmadığından bge-m3 kullanılır, yanıt alınamazsa yerel N-Gram otomatik devreye girer.</small>
         </div>
 
         <div id="testConnResult" style="display: none; padding: 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; margin-top: 10px;"></div>
@@ -1562,6 +1561,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=v11_identity_click_fix"></script>
+  <script src="/static/app.js?v=v12_milli_ag_only"></script>
 </body>
 </html>
