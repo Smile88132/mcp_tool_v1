@@ -2053,8 +2053,19 @@ def store_kokpit_identity_and_inputs(
     ekstra input/config/embedding parametrelerini işler ve oturuma kaydeder.
     Çok kullanıcılı izolasyon için hedef oturumda saklar.
     """
-    raw_user = payload.get("user")
-    token = payload.get("token") or payload.get("auth_token") or payload.get("jwt_token")
+    raw_user = (
+        payload.get("user")
+        or payload.get("currentUser")
+        or (payload.get("data", {}) if isinstance(payload.get("data"), dict) else {}).get("user")
+        or (payload.get("payload", {}) if isinstance(payload.get("payload"), dict) else {}).get("user")
+    )
+    token = (
+        payload.get("token")
+        or payload.get("auth_token")
+        or payload.get("jwt_token")
+        or (payload.get("data", {}) if isinstance(payload.get("data"), dict) else {}).get("token")
+        or (payload.get("payload", {}) if isinstance(payload.get("payload"), dict) else {}).get("token")
+    )
     source = payload.get("source") or "kokpit-iframe-bridge"
     msg_type = payload.get("type") or "kokpit-identity"
     status = payload.get("status") or "success"

@@ -73,6 +73,40 @@
     allowedOrigins: DEFAULT_ALLOWED_ORIGINS.join(', ')
   };
 
+  const NON_CHAT_MODEL_KEYWORDS = [
+    'flux', 'diffusion', 'sdxl', 'stable-diffusion', 'dall-e',
+    'whisper', 'bark', 'tts', 'seamless', 'embed', 'bge-', 'e5-',
+    'rerank', 'clip', 'midjourney', 'controlnet', 'sam-', 'segment', 'yolo'
+  ];
+
+  function isChatLlmModel(modelName) {
+    if (!modelName || typeof modelName !== 'string') return false;
+    const lower = modelName.toLowerCase();
+    return !NON_CHAT_MODEL_KEYWORDS.some(kw => lower.includes(kw));
+  }
+
+  function loadConfig() {
+    let cfg = { ...DEFAULT_CONFIG };
+    try {
+      const sessionStored = sessionStorage.getItem(STORAGE_KEY);
+      if (sessionStored) {
+        cfg = { ...DEFAULT_CONFIG, ...JSON.parse(sessionStored) };
+      } else {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          cfg = { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
+        }
+      }
+    } catch (e) {
+      console.warn('Config load error:', e);
+    }
+    // Görsel üretim (FLUX vb.) veya geçersiz modelleri temizle, varsayılan LLM modeline çek
+    if (!cfg.model || !isChatLlmModel(cfg.model) || cfg.model === 'aselix-llm-v1') {
+      cfg.model = 'openai/gpt-oss-120b';
+    }
+    return cfg;
+  }
+
   let appConfig = loadConfig();
   let serverConfig = null; // /api/aselix/config üzerinden çekilen sunucu durumu
   let chatHistory = [];    // Chat asistanı için çok turlu konuşma geçmişi
@@ -362,16 +396,16 @@
   // Initialization & Theme Handling
   // --------------------------------------------------------------------------
   function init() {
-    initTheme();
-    loadServerConfig();
-    applyConfigToUI();
-    applyAdminVisibility();
-    setupEventListeners();
-    initKokpitIdentityBridge();
-    loadBakiyeSiparisItems();
-    refreshHomePageStats();
-    switchMainPageTab('home');
-    loadAvailableModelsAuto();
+    try { initTheme(); } catch (e) { console.warn('initTheme error:', e); }
+    try { loadServerConfig(); } catch (e) { console.warn('loadServerConfig error:', e); }
+    try { applyConfigToUI(); } catch (e) { console.warn('applyConfigToUI error:', e); }
+    try { applyAdminVisibility(); } catch (e) { console.warn('applyAdminVisibility error:', e); }
+    try { setupEventListeners(); } catch (e) { console.error('setupEventListeners error:', e); }
+    try { initKokpitIdentityBridge(); } catch (e) { console.error('initKokpitIdentityBridge error:', e); }
+    try { loadBakiyeSiparisItems(); } catch (e) { console.warn('loadBakiyeSiparisItems error:', e); }
+    try { refreshHomePageStats(); } catch (e) { console.warn('refreshHomePageStats error:', e); }
+    try { switchMainPageTab('home'); } catch (e) { console.error('switchMainPageTab error:', e); }
+    try { loadAvailableModelsAuto(); } catch (e) { console.warn('loadAvailableModelsAuto error:', e); }
   }
 
   function switchMainPageTab(tabName) {
@@ -836,40 +870,6 @@
   // --------------------------------------------------------------------------
   // Config & State Management (Oturum izolasyonlu: sessionStorage öncelikli)
   // --------------------------------------------------------------------------
-  const NON_CHAT_MODEL_KEYWORDS = [
-    'flux', 'diffusion', 'sdxl', 'stable-diffusion', 'dall-e',
-    'whisper', 'bark', 'tts', 'seamless', 'embed', 'bge-', 'e5-',
-    'rerank', 'clip', 'midjourney', 'controlnet', 'sam-', 'segment', 'yolo'
-  ];
-
-  function isChatLlmModel(modelName) {
-    if (!modelName || typeof modelName !== 'string') return false;
-    const lower = modelName.toLowerCase();
-    return !NON_CHAT_MODEL_KEYWORDS.some(kw => lower.includes(kw));
-  }
-
-  function loadConfig() {
-    let cfg = { ...DEFAULT_CONFIG };
-    try {
-      const sessionStored = sessionStorage.getItem(STORAGE_KEY);
-      if (sessionStored) {
-        cfg = { ...DEFAULT_CONFIG, ...JSON.parse(sessionStored) };
-      } else {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          cfg = { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
-        }
-      }
-    } catch (e) {
-      console.warn('Config load error:', e);
-    }
-    // Görsel üretim (FLUX vb.) veya geçersiz modelleri temizle, varsayılan LLM modeline çek
-    if (!cfg.model || !isChatLlmModel(cfg.model) || cfg.model === 'aselix-llm-v1') {
-      cfg.model = 'openai/gpt-oss-120b';
-    }
-    return cfg;
-  }
-
   function saveConfig() {
     try {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(appConfig));
@@ -2505,17 +2505,24 @@
     // 3. URL Query Parametreleri ile dışarıdan gelen input / kimlik varsa al
     parseUrlExternalInputs(urlParams);
 
-    // 4. Ana pencereye (Kokpit) iframe'in hazır olduğunu bildir
+    // 4. Ana pencereye (Kokpit) iframe'in hazır olduğunu bildir ve kimlik iste
     if (window.parent && window.parent !== window.self) {
-      try {
-        window.parent.postMessage({
-          type: 'kokpit-iframe-ready',
-          source: 'vennflow-app',
-          status: 'ready',
-          session_id: currentSessionId,
-          timestamp: new Date().toISOString()
-        }, '*');
-      } catch (_) {}
+      const sendReadyHandshake = () => {
+        try {
+          window.parent.postMessage({
+            type: 'kokpit-iframe-ready',
+            source: 'vennflow-app',
+            status: 'ready',
+            session_id: currentSessionId,
+            timestamp: new Date().toISOString()
+          }, '*');
+          window.parent.postMessage({ type: 'get-kokpit-identity', source: 'vennflow-app' }, '*');
+          window.parent.postMessage({ type: 'request-identity', source: 'vennflow-app' }, '*');
+        } catch (_) {}
+      };
+      sendReadyHandshake();
+      setTimeout(sendReadyHandshake, 400);
+      setTimeout(sendReadyHandshake, 1200);
     }
 
     // 5. Beklemeden derhal sessionStorage veya Backend oturumuna bak
@@ -2599,19 +2606,27 @@
 
   async function handleReceivedKokpitIdentity(payload, origin) {
     if (!payload || typeof payload !== 'object') return;
-    const token = payload.token || payload.auth_token || payload.jwt_token || kokpitIdentity.token || null;
-    let user = payload.user || kokpitIdentity.user || null;
+    const subData = (payload.data && typeof payload.data === 'object') ? payload.data : {};
+    const subPayload = (payload.payload && typeof payload.payload === 'object') ? payload.payload : {};
+
+    const token = payload.token || payload.auth_token || payload.jwt_token
+      || subData.token || subData.auth_token || subData.jwt_token
+      || subPayload.token || subPayload.auth_token || subPayload.jwt_token
+      || kokpitIdentity.token || null;
+
+    let user = payload.user || payload.currentUser || subData.user || subData.currentUser || subPayload.user || kokpitIdentity.user || null;
     if (typeof user === 'string') {
-      user = { isim: user, username: user, role: 'User' };
+      try { user = JSON.parse(user); } catch (_) { user = { isim: user, username: user, role: 'User' }; }
     }
-    if (!user && (payload.sicil || payload.isim || payload.name || payload.username || payload.email || payload.role)) {
+    const combinedObj = { ...subData, ...subPayload, ...payload };
+    if (!user && (combinedObj.sicil || combinedObj.isim || combinedObj.name || combinedObj.username || combinedObj.email || combinedObj.role)) {
       user = {
-        sicil: payload.sicil || '',
-        isim: payload.isim || payload.name || payload.username || 'Kokpit Kullanıcısı',
-        username: payload.username || payload.name || 'kokpit.user',
-        email: payload.email || payload.mail || '',
-        mudurluk: payload.mudurluk || payload.department || '',
-        role: payload.role || payload.rol || 'User'
+        sicil: combinedObj.sicil || '',
+        isim: combinedObj.isim || combinedObj.name || combinedObj.username || 'Kokpit Kullanıcısı',
+        username: combinedObj.username || combinedObj.name || 'kokpit.user',
+        email: combinedObj.email || combinedObj.mail || '',
+        mudurluk: combinedObj.mudurluk || combinedObj.department || '',
+        role: combinedObj.role || combinedObj.rol || 'User'
       };
     }
 
@@ -3670,12 +3685,12 @@
     if (!kpiSavedRecordsBody) return;
     const isAdmin = isCurrentUserAdmin();
 
-    const fProje = kpiFilterProje ? kpiFilterProje.value : 'ALL';
-    const fSd = kpiFilterSd ? kpiFilterSd.value.toLowerCase().trim() : '';
-    const fKalem = kpiFilterKalem ? kpiFilterKalem.value.toLowerCase().trim() : '';
-    const fF2 = kpiFilterFaaliyet2 ? kpiFilterFaaliyet2.value : 'ALL';
-    const fUrun = kpiFilterUrun ? kpiFilterUrun.value.toLowerCase().trim() : '';
-    const fSearch = kpiFilterSearch ? kpiFilterSearch.value.toLowerCase().trim() : '';
+    const fProje = (kpiFilterProje && kpiFilterProje.value) ? kpiFilterProje.value : 'ALL';
+    const fSd = (kpiFilterSd && kpiFilterSd.value) ? String(kpiFilterSd.value).toLowerCase().trim() : '';
+    const fKalem = (kpiFilterKalem && kpiFilterKalem.value) ? String(kpiFilterKalem.value).toLowerCase().trim() : '';
+    const fF2 = (kpiFilterFaaliyet2 && kpiFilterFaaliyet2.value) ? kpiFilterFaaliyet2.value : 'ALL';
+    const fUrun = (kpiFilterUrun && kpiFilterUrun.value) ? String(kpiFilterUrun.value).toLowerCase().trim() : '';
+    const fSearch = (kpiFilterSearch && kpiFilterSearch.value) ? String(kpiFilterSearch.value).toLowerCase().trim() : '';
 
     const filtered = kpiLoadedRecordsCache
       .map((r, originalIdx) => ({ r, originalIdx }))
