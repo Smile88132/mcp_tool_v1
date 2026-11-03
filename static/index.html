@@ -448,7 +448,7 @@
         <div class="config-pills-group admin-only-item" id="configPillsGroup" style="display: none;">
           <div class="active-model-pill" id="activeModelPill">
             <span class="model-tag">Model:</span>
-            <span class="model-name" id="currentModelDisplay">aselix-llm-v1</span>
+            <span class="model-name" id="currentModelDisplay">openai/gpt-oss-120b</span>
           </div>
 
           <div class="active-model-pill" id="batchProtectionPill" title="1 dakikalık zaman aşımı koruması devrede. Talepler 15'erli batchler halinde iletilir.">
@@ -1020,7 +1020,7 @@
             </div>
             <div>
               <h3>ASELSAN AselixAI Chat Asistanı</h3>
-              <p class="panel-meta">Seçili Model: <span id="chatModelNameDisplay">aselix-llm-v1</span> • <span id="chatNetworkBadge" class="badge-network" style="display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 600; border-radius: 12px; background: rgba(59, 130, 246, 0.15); color: #2563eb;">Milli Ağ / Aynet Otomatik</span></p>
+              <p class="panel-meta">Seçili Model: <span id="chatModelNameDisplay">openai/gpt-oss-120b</span> • <span id="chatNetworkBadge" class="badge-network" style="display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 600; border-radius: 12px; background: rgba(59, 130, 246, 0.15); color: #2563eb;">Milli Ağ / Aynet Otomatik</span></p>
             </div>
           </div>
           <div style="display: flex; gap: 8px;">
@@ -1443,7 +1443,8 @@
             </button>
           </div>
           <select id="cfgModelSelect" class="form-select">
-            <option value="aselix-llm-v1">aselix-llm-v1 (Varsayılan)</option>
+            <option value="openai/gpt-oss-120b" selected>openai/gpt-oss-120b (Varsayılan)</option>
+            <option value="aselix-llm-v1">aselix-llm-v1</option>
             <option value="aselix-chat-default">aselix-chat-default</option>
             <option value="llama-3-8b-instruct">llama-3-8b-instruct</option>
             <option value="mistral-7b-instruct">mistral-7b-instruct</option>

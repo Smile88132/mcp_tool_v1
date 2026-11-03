@@ -926,7 +926,7 @@ def get_effective_aselix_config(
         or (KOKPIT_IDENTITY_STORE.get("jwt_token") or "").strip()
     )
 
-    eff_model = (model or "").strip() or os.getenv("ASELIX_MODEL", "").strip() or "aselix-llm-v1"
+    eff_model = (model or "").strip() or os.getenv("ASELIX_MODEL", "").strip() or "openai/gpt-oss-120b"
 
     if timeout and timeout > 0:
         eff_timeout = timeout
@@ -951,6 +951,7 @@ def fetch_aselix_models(base_url: Optional[str] = None, api_key: Optional[str] =
         candidate_urls.append(ASELIX_MILLI_BASE_URL)
 
     fallback_models = [
+        "openai/gpt-oss-120b",
         "aselix-llm-v1",
         "aselix-chat-default",
         "llama-3-8b-instruct",
@@ -985,14 +986,21 @@ def fetch_aselix_models(base_url: Optional[str] = None, api_key: Optional[str] =
                         elif isinstance(it, str):
                             model_ids.append(it)
 
+                final_models = model_ids if model_ids else fallback_models
+                # Kullanıcının öncelikli istediği openai/gpt-oss-120b modelini listeye dahil et ve en başa al
+                if "openai/gpt-oss-120b" not in final_models:
+                    final_models = ["openai/gpt-oss-120b"] + final_models
+                else:
+                    final_models = ["openai/gpt-oss-120b"] + [m for m in final_models if m != "openai/gpt-oss-120b"]
+
                 net_name = "aynet" if "agate" in target_url else "milli"
                 return {
                     "durum": "basarili",
                     "kaynak": "canli_api",
                     "base_url": target_url,
                     "aktif_ag": net_name,
-                    "modeller": model_ids if model_ids else fallback_models,
-                    "mesaj": f"{len(model_ids)} model AselixAI API'den başarıyla listelendi ({net_name.upper()})."
+                    "modeller": final_models,
+                    "mesaj": f"{len(final_models)} model AselixAI API'den başarıyla listelendi ({net_name.upper()})."
                 }
         except Exception:
             continue
@@ -1064,7 +1072,22 @@ def call_aselix_chat(
                         if isinstance(first_choice, dict):
                             msg = first_choice.get("message", {})
                             if isinstance(msg, dict):
-                                content = msg.get("content", "")
+                                raw_c = msg.get("content", "")
+                                if isinstance(raw_c, list):
+                                    # OpenAI / Claude multi-part content listesi ([{"type": "text", "text": "..."}])
+                                    parts = []
+                                    for part in raw_c:
+                                        if isinstance(part, dict):
+                                            parts.append(str(part.get("text") or part.get("content") or ""))
+                                        elif isinstance(part, str):
+                                            parts.append(part)
+                                        else:
+                                            parts.append(str(part))
+                                    content = "".join(parts)
+                                elif isinstance(raw_c, str):
+                                    content = raw_c
+                                elif raw_c is not None:
+                                    content = json.dumps(raw_c, ensure_ascii=False)
                 if not content:
                     content = json.dumps(data, ensure_ascii=False)
                 
@@ -1308,14 +1331,43 @@ def call_aselsan_llm_suite_flow(
         }
 
 
-def extract_json_array_from_llm(text: str) -> List[Dict[str, Any]]:
+def extract_json_array_from_llm(text: Any) -> List[Dict[str, Any]]:
     """
-    LLM metin çıktısından JSON dizisini toleranslı ve çok katmanlı olarak ayıklar.
+    LLM çıktısından JSON dizisini toleranslı ve çok katmanlı olarak ayıklar.
+    Girdi list, dict veya OpenAI blok listesi ise güvenle düz metne / nesne listesine dönüştürür.
     <think>...</think> bloklarını temizler, markdown kod bloklarını soyar,
     tek tırnakları (Python dict) ve regex ile bireysel nesneleri çözer.
     """
-    if not text:
+    if text is None:
         return []
+
+    # 0. Girdi doğrudan zaten bir liste ise
+    if isinstance(text, list):
+        if not text:
+            return []
+        # Eğer liste zaten dict nesnelerinden oluşuyorsa
+        if all(isinstance(x, dict) for x in text):
+            # Eğer OpenAI / Anthropic [{"type": "text", "text": "..."}] blok listesi ise metinleri birleştir
+            if any("type" in x and "text" in x for x in text):
+                combined = " ".join(str(x.get("text", "")) for x in text if isinstance(x, dict))
+                return extract_json_array_from_llm(combined)
+            # Doğrudan eşleşme sözlükleri [{"a": 1, ...}]
+            return text
+        # String veya karışık elemanlı liste ise metinlerini birleştir
+        joined_str = " ".join(str(x) for x in text)
+        return extract_json_array_from_llm(joined_str)
+
+    if isinstance(text, dict):
+        if "data" in text and isinstance(text["data"], list):
+            return extract_json_array_from_llm(text["data"])
+        return [text]
+
+    if not isinstance(text, str):
+        text = str(text)
+
+    if not text.strip():
+        return []
+
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     if "```json" in cleaned:
         cleaned = cleaned.split("```json")[1].split("```")[0].strip()
@@ -1649,7 +1701,7 @@ def compare_items_with_aselix_batch(
     raw_output = chat_res.get("cevap", "") or ""
     parsed = extract_json_array_from_llm(raw_output)
     # Geçerli ama boş JSON dizisi ("[]") = AI hiç eşleşme bulmadı; bu bir hata değildir
-    compact = raw_output.replace(" ", "").replace("\n", "").replace("\r", "")
+    compact = str(raw_output).replace(" ", "").replace("\n", "").replace("\r", "")
     parsed_ok = bool(parsed) or "[]" in compact
 
     matched_pairs: List[Dict[str, Any]] = []
@@ -4737,12 +4789,17 @@ try:
             "chat_ping": chat_ping
         }
 
+    @web_app.get("/api/aselix/models")
     @web_app.post("/api/aselix/models")
-    def api_aselix_models(req: AselixModelsRequest):
+    def api_aselix_models(request: Request, req: Optional[AselixModelsRequest] = None):
         """Aselsan AselixAI API'sinden (GET /models) mevcut modelleri çeker (Threadpool güvenli senkron def)."""
+        sid, sess = resolve_session_from_request(request)
+        base_url = req.base_url if req else None
+        api_key = req.api_key if req else None
+        eff_url, eff_key, _, _ = get_effective_aselix_config(base_url, api_key, session_id=sid)
         return fetch_aselix_models(
-            base_url=req.base_url,
-            api_key=req.api_key
+            base_url=eff_url,
+            api_key=eff_key
         )
 
     @web_app.post("/api/aselix/chat")

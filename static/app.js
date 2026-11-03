@@ -63,7 +63,7 @@
     network: 'milli',
     baseUrl: 'https://api.aselixai.aselsan.com.tr/v1',
     apiKey: '',
-    model: 'aselix-llm-v1',
+    model: 'openai/gpt-oss-120b',
     embeddingModel: 'text-embedding-3-small',
     engine: 'local', // 'local', 'embedding', or 'aselix'
     threshold: 80,   // %50 - %100
@@ -371,6 +371,7 @@
     loadBakiyeSiparisItems();
     refreshHomePageStats();
     switchMainPageTab('home');
+    loadAvailableModelsAuto();
   }
 
   function switchMainPageTab(tabName) {
@@ -764,6 +765,13 @@
     btnToggleApiKey.addEventListener('click', toggleApiKeyVisibility);
     btnFetchModels.addEventListener('click', fetchModelsFromApi);
     btnTestConn.addEventListener('click', testApiConnection);
+    if (cfgModelSelect) {
+      cfgModelSelect.addEventListener('change', () => {
+        appConfig.model = cfgModelSelect.value;
+        saveConfig();
+        applyConfigToUI();
+      });
+    }
 
     // Kokpit Identity Modal
     if (btnOpenIdentity) btnOpenIdentity.addEventListener('click', openIdentityModal);
@@ -2375,12 +2383,54 @@
         if (serverConfig.default_batch_size && !appConfig.batchSize) {
           appConfig.batchSize = serverConfig.default_batch_size;
         }
+        if (serverConfig.default_model && (!appConfig.model || appConfig.model === 'aselix-llm-v1')) {
+          appConfig.model = serverConfig.default_model;
+          saveConfig();
+        }
         if (chatNetworkBadge && serverConfig.aktif_ag) {
           chatNetworkBadge.textContent = serverConfig.aktif_ag.toUpperCase();
         }
       }
     } catch (e) {
       console.warn('Server config fetch warning:', e);
+    }
+  }
+
+  async function loadAvailableModelsAuto() {
+    try {
+      const resp = await fetch('/api/aselix/models');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const modelsList = data.modeller || [];
+      if (!modelsList || modelsList.length === 0) return;
+
+      if (cfgModelSelect) {
+        cfgModelSelect.innerHTML = '';
+        modelsList.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = m + (m === 'openai/gpt-oss-120b' ? ' (Önerilen)' : '');
+          cfgModelSelect.appendChild(opt);
+        });
+
+        // En son kullanılan model sistemde kalmalı; model yoksa veya eski varsayılan ise openai/gpt-oss-120b
+        let targetModel = appConfig.model;
+        if (!targetModel || targetModel === 'aselix-llm-v1') {
+          targetModel = modelsList.includes('openai/gpt-oss-120b') ? 'openai/gpt-oss-120b' : modelsList[0];
+        } else if (!modelsList.includes(targetModel)) {
+          const opt = document.createElement('option');
+          opt.value = targetModel;
+          opt.textContent = targetModel;
+          cfgModelSelect.appendChild(opt);
+        }
+
+        cfgModelSelect.value = targetModel;
+        appConfig.model = targetModel;
+        saveConfig();
+        applyConfigToUI();
+      }
+    } catch (e) {
+      console.warn('Otomatik model yükleme uyarısı:', e);
     }
   }
 
@@ -2986,10 +3036,24 @@
         data.modeller.forEach(m => {
           const opt = document.createElement('option');
           opt.value = m;
-          opt.textContent = m;
-          if (m === appConfig.model) opt.selected = true;
+          opt.textContent = m + (m === 'openai/gpt-oss-120b' ? ' (Önerilen)' : '');
           cfgModelSelect.appendChild(opt);
         });
+
+        let targetModel = appConfig.model;
+        if (!targetModel || targetModel === 'aselix-llm-v1') {
+          targetModel = data.modeller.includes('openai/gpt-oss-120b') ? 'openai/gpt-oss-120b' : data.modeller[0];
+        } else if (!data.modeller.includes(targetModel)) {
+          const opt = document.createElement('option');
+          opt.value = targetModel;
+          opt.textContent = targetModel;
+          cfgModelSelect.appendChild(opt);
+        }
+
+        cfgModelSelect.value = targetModel;
+        appConfig.model = targetModel;
+        saveConfig();
+        applyConfigToUI();
 
         fetchModelsStatus.style.display = 'block';
         fetchModelsStatus.style.background = 'rgba(16, 185, 129, 0.15)';

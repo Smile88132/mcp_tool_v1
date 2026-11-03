@@ -675,10 +675,10 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
     def test_get_effective_aselix_config(self):
         import app
         # 1. Varsayılanlar
-        with mock.patch.dict(os.environ, {"ASELIX_API_KEY": "", "ASELIX_BASE_URL": "", "ASELIX_TIMEOUT": ""}, clear=True):
+        with mock.patch.dict(os.environ, {"ASELIX_API_KEY": "", "ASELIX_BASE_URL": "", "ASELIX_TIMEOUT": "", "ASELIX_MODEL": ""}, clear=True):
             eff_url, eff_key, eff_model, eff_timeout = app.get_effective_aselix_config()
             self.assertEqual(eff_url, "https://api.aselixai.aselsan.com.tr/v1")
-            self.assertEqual(eff_model, "aselix-llm-v1")
+            self.assertEqual(eff_model, "openai/gpt-oss-120b")
             self.assertEqual(eff_timeout, 90)
 
         # 2. .env önceliği
@@ -729,6 +729,24 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
         arr4 = app.extract_json_array_from_llm(txt4)
         self.assertEqual(len(arr4), 2)
 
+        # E) List input (TypeError: expected string or bytes-like object, got 'list')
+        list_input_1 = [{"a": 1, "b": 2, "similarity": 95}]
+        arr5 = app.extract_json_array_from_llm(list_input_1)
+        self.assertEqual(len(arr5), 1)
+        self.assertEqual(arr5[0]["b"], 2)
+
+        # F) Multi-block content list (OpenAI style [{"type": "text", "text": "..."}])
+        list_input_2 = [{"type": "text", "text": '[{"a": 2, "b": 4, "similarity": 89}]'}]
+        arr6 = app.extract_json_array_from_llm(list_input_2)
+        self.assertEqual(len(arr6), 1)
+        self.assertEqual(arr6[0]["b"], 4)
+
+        # G) String list input
+        list_input_3 = ['[{"a": 3, "b": null, "similarity": 0}]']
+        arr7 = app.extract_json_array_from_llm(list_input_3)
+        self.assertEqual(len(arr7), 1)
+        self.assertEqual(arr7[0]["a"], 3)
+
     def test_call_aselix_chat_dual_network_failover(self):
         import app
         call_urls = []
@@ -770,7 +788,7 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
             self.assertEqual(data["default_batch_size"], 5)
 
         # 2. /api/aselix/test-connection
-        with mock.patch("app.fetch_aselix_models", return_value={"durum": "basarili", "base_url": "https://api.aselixai.aselsan.com.tr/v1", "aktif_ag": "milli", "modeller": ["aselix-llm-v1"]}):
+        with mock.patch("app.fetch_aselix_models", return_value={"durum": "basarili", "base_url": "https://api.aselixai.aselsan.com.tr/v1", "aktif_ag": "milli", "modeller": ["openai/gpt-oss-120b", "aselix-llm-v1"]}):
             with mock.patch("app.call_aselix_chat", return_value={"durum": "basarili", "cevap": "Canlıyım", "aktif_ag": "milli"}):
                 conn_res = self.client.post("/api/aselix/test-connection", json={"api_key": "k"})
                 self.assertEqual(conn_res.status_code, 200)
@@ -778,6 +796,14 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
                 self.assertEqual(cdata["durum"], "basarili")
                 self.assertEqual(cdata["aktif_ag"], "milli")
                 self.assertIsNotNone(cdata["chat_ping"])
+
+        # 3. GET /api/aselix/models (Sayfa yenilemede otomatik modelleri çekme)
+        with mock.patch("app.fetch_aselix_models", return_value={"durum": "basarili", "modeller": ["openai/gpt-oss-120b", "aselix-llm-v1"]}):
+            models_res = self.client.get("/api/aselix/models")
+            self.assertEqual(models_res.status_code, 200)
+            m_data = models_res.json()
+            self.assertEqual(m_data["durum"], "basarili")
+            self.assertIn("openai/gpt-oss-120b", m_data["modeller"])
 
     def test_strip_bakiye_metadata_from_text(self):
         from app import strip_bakiye_metadata_from_text
