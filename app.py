@@ -895,6 +895,43 @@ def extract_langflow_response(data: Any) -> str:
 ASELIX_MILLI_BASE_URL = "https://api.aselixai.aselsan.com.tr/v1"
 ASELIX_AYNET_BASE_URL = "https://agate.aselsan.com.tr/send/milli/api.aselixai/v1"
 
+NON_CHAT_KEYWORDS = [
+    "flux",
+    "diffusion",
+    "sdxl",
+    "stable-diffusion",
+    "dall-e",
+    "whisper",
+    "bark",
+    "tts",
+    "seamless",
+    "embed",
+    "bge-",
+    "e5-",
+    "rerank",
+    "clip",
+    "midjourney",
+    "controlnet",
+    "sam-",
+    "segment",
+    "yolo",
+    "triposr",
+    "shap-e",
+    "cogvideo",
+    "mochi",
+    "animatediff"
+]
+
+def is_chat_llm_model(model_name: Optional[str]) -> bool:
+    """
+    Modelin metin/sohbet (LLM) modeli olup olmadığını doğrular.
+    Görsel üretim (FLUX, Stable Diffusion), ses (Whisper, TTS) ve yalnızca embedding/vektör modellerini eler.
+    """
+    if not model_name or not isinstance(model_name, str):
+        return False
+    name_lower = model_name.lower().strip()
+    return not any(kw in name_lower for kw in NON_CHAT_KEYWORDS)
+
 
 def get_effective_aselix_config(
     base_url: Optional[str] = None,
@@ -910,7 +947,7 @@ def get_effective_aselix_config(
       2. .env / os.environ ortam değişkenleri (ASELIX_*)
       3. Oturuma ait Kokpit SSO Token (ACTIVE_SESSIONS[session_id]["jwt_token"])
       4. Genel Kokpit SSO Token (KOKPIT_IDENTITY_STORE["jwt_token"])
-      5. Yerleşik varsayılanlar (Milli Ağ, aselix-llm-v1, 90 sn)
+      5. Yerleşik varsayılanlar (Milli Ağ, openai/gpt-oss-120b, 90 sn)
     """
     eff_url = (base_url or "").strip() or os.getenv("ASELIX_BASE_URL", "").strip() or ASELIX_MILLI_BASE_URL
     eff_url = eff_url.rstrip("/")
@@ -927,6 +964,8 @@ def get_effective_aselix_config(
     )
 
     eff_model = (model or "").strip() or os.getenv("ASELIX_MODEL", "").strip() or "openai/gpt-oss-120b"
+    if not is_chat_llm_model(eff_model):
+        eff_model = "openai/gpt-oss-120b"
 
     if timeout and timeout > 0:
         eff_timeout = timeout
@@ -986,7 +1025,9 @@ def fetch_aselix_models(base_url: Optional[str] = None, api_key: Optional[str] =
                         elif isinstance(it, str):
                             model_ids.append(it)
 
-                final_models = model_ids if model_ids else fallback_models
+                # YALNIZCA sohbet/metin (LLM) modellerini filtrele:
+                chat_models = [m for m in model_ids if is_chat_llm_model(m)]
+                final_models = chat_models if chat_models else fallback_models
                 # Kullanıcının öncelikli istediği openai/gpt-oss-120b modelini listeye dahil et ve en başa al
                 if "openai/gpt-oss-120b" not in final_models:
                     final_models = ["openai/gpt-oss-120b"] + final_models
@@ -1030,6 +1071,8 @@ def call_aselix_chat(
     - .env API anahtarını ve Kokpit SSO tokenini otomatik tanır.
     """
     eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(base_url, api_key, model, timeout)
+    if not is_chat_llm_model(eff_model):
+        eff_model = "openai/gpt-oss-120b"
     t_start = time.time()
 
     candidate_urls = [eff_url]
@@ -1130,6 +1173,13 @@ def call_aselix_chat(
     if last_err:
         last_err["toplam_gecen_sure_sn"] = total_elapsed
         last_err["denenen_aglar"] = attempted
+        # Eğer yedek ağ (Aynet Apigee) 404 ApiProxy not found döndüyse, birincil ağdaki gerçek hatayı öne çıkar:
+        if len(attempted) > 1 and attempted[-1].get("status") == 404 and "ApiProxy is not found" in str(attempted[-1].get("err", "")):
+            prim = attempted[0]
+            last_err["mesaj"] = (
+                f"AselixAI birincil uç noktası ({prim.get('url')}) yanıt vermedi ({prim.get('err')}). "
+                f"Yedek ağ geçidinde (/chat/completions) ApiProxy tanımlı değil."
+            )
         return last_err
 
     return {
@@ -4482,7 +4532,7 @@ try:
     async def api_flow_compare(
         file_1: UploadFile = File(...),
         file_2: UploadFile = File(...),
-        base_url: str = Form("https://llmsuiteflow.aiplatform.aselsan.com.tr"),
+        base_url: str = Form(""),
         flow_id: str = Form("c16ecc83-ff64-4fc7-bb52-0f594beaf70a"),
         api_key: Optional[str] = Form(""),
         tweaks_input: str = Form(""),

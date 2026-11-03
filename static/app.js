@@ -836,20 +836,38 @@
   // --------------------------------------------------------------------------
   // Config & State Management (Oturum izolasyonlu: sessionStorage öncelikli)
   // --------------------------------------------------------------------------
+  const NON_CHAT_MODEL_KEYWORDS = [
+    'flux', 'diffusion', 'sdxl', 'stable-diffusion', 'dall-e',
+    'whisper', 'bark', 'tts', 'seamless', 'embed', 'bge-', 'e5-',
+    'rerank', 'clip', 'midjourney', 'controlnet', 'sam-', 'segment', 'yolo'
+  ];
+
+  function isChatLlmModel(modelName) {
+    if (!modelName || typeof modelName !== 'string') return false;
+    const lower = modelName.toLowerCase();
+    return !NON_CHAT_MODEL_KEYWORDS.some(kw => lower.includes(kw));
+  }
+
   function loadConfig() {
+    let cfg = { ...DEFAULT_CONFIG };
     try {
       const sessionStored = sessionStorage.getItem(STORAGE_KEY);
       if (sessionStored) {
-        return { ...DEFAULT_CONFIG, ...JSON.parse(sessionStored) };
-      }
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        return { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
+        cfg = { ...DEFAULT_CONFIG, ...JSON.parse(sessionStored) };
+      } else {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          cfg = { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
+        }
       }
     } catch (e) {
       console.warn('Config load error:', e);
     }
-    return { ...DEFAULT_CONFIG };
+    // Görsel üretim (FLUX vb.) veya geçersiz modelleri temizle, varsayılan LLM modeline çek
+    if (!cfg.model || !isChatLlmModel(cfg.model) || cfg.model === 'aselix-llm-v1') {
+      cfg.model = 'openai/gpt-oss-120b';
+    }
+    return cfg;
   }
 
   function saveConfig() {
@@ -2359,7 +2377,7 @@
     appConfig.network = network;
     appConfig.baseUrl = cfgBaseUrl.value.trim() || NETWORK_URLS.milli;
     appConfig.apiKey = cfgApiKey.value.trim();
-    appConfig.model = cfgModelSelect.value || 'aselix-llm-v1';
+    appConfig.model = cfgModelSelect.value || 'openai/gpt-oss-120b';
     if (cfgBatchSize) appConfig.batchSize = parseInt(cfgBatchSize.value, 10) || 5;
     if (cfgTimeoutSec) appConfig.timeoutSec = parseInt(cfgTimeoutSec.value, 10) || 90;
     if (cfgEmbeddingModel) appConfig.embeddingModel = cfgEmbeddingModel.value.trim() || 'text-embedding-3-small';
@@ -2383,7 +2401,7 @@
         if (serverConfig.default_batch_size && !appConfig.batchSize) {
           appConfig.batchSize = serverConfig.default_batch_size;
         }
-        if (serverConfig.default_model && (!appConfig.model || appConfig.model === 'aselix-llm-v1')) {
+        if (serverConfig.default_model && (!appConfig.model || appConfig.model === 'aselix-llm-v1' || !isChatLlmModel(appConfig.model))) {
           appConfig.model = serverConfig.default_model;
           saveConfig();
         }
@@ -2413,15 +2431,12 @@
           cfgModelSelect.appendChild(opt);
         });
 
-        // En son kullanılan model sistemde kalmalı; model yoksa veya eski varsayılan ise openai/gpt-oss-120b
+        // En son kullanılan geçerli LLM modeli sistemde kalmalı; model yoksa/geçersizse openai/gpt-oss-120b
         let targetModel = appConfig.model;
-        if (!targetModel || targetModel === 'aselix-llm-v1') {
+        if (!targetModel || !isChatLlmModel(targetModel) || targetModel === 'aselix-llm-v1') {
           targetModel = modelsList.includes('openai/gpt-oss-120b') ? 'openai/gpt-oss-120b' : modelsList[0];
         } else if (!modelsList.includes(targetModel)) {
-          const opt = document.createElement('option');
-          opt.value = targetModel;
-          opt.textContent = targetModel;
-          cfgModelSelect.appendChild(opt);
+          targetModel = modelsList.includes('openai/gpt-oss-120b') ? 'openai/gpt-oss-120b' : modelsList[0];
         }
 
         cfgModelSelect.value = targetModel;
@@ -3041,13 +3056,10 @@
         });
 
         let targetModel = appConfig.model;
-        if (!targetModel || targetModel === 'aselix-llm-v1') {
+        if (!targetModel || !isChatLlmModel(targetModel) || targetModel === 'aselix-llm-v1') {
           targetModel = data.modeller.includes('openai/gpt-oss-120b') ? 'openai/gpt-oss-120b' : data.modeller[0];
         } else if (!data.modeller.includes(targetModel)) {
-          const opt = document.createElement('option');
-          opt.value = targetModel;
-          opt.textContent = targetModel;
-          cfgModelSelect.appendChild(opt);
+          targetModel = data.modeller.includes('openai/gpt-oss-120b') ? 'openai/gpt-oss-120b' : data.modeller[0];
         }
 
         cfgModelSelect.value = targetModel;
@@ -3090,7 +3102,7 @@
         body: JSON.stringify({
           base_url: cfgBaseUrl.value.trim(),
           api_key: cfgApiKey.value.trim(),
-          model: cfgModelSelect.value || 'aselix-llm-v1',
+          model: cfgModelSelect.value || 'openai/gpt-oss-120b',
           messages: [{ role: 'user', content: 'Merhaba, bağlantı testi. 1 cümle ile teyit et.' }]
         })
       });

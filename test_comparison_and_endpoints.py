@@ -1020,6 +1020,33 @@ class TestMultiUserSessionIsolation(unittest.TestCase):
         self.assertEqual(get_x.status_code, 200)
         self.assertIn("items_1", get_x.json().get("external_inputs", {}))
 
+    def test_is_chat_llm_model_and_filtering(self):
+        from app import is_chat_llm_model, get_effective_aselix_config, fetch_aselix_models
+        # Non-chat models must be rejected
+        self.assertFalse(is_chat_llm_model("FLUX.2-dev"))
+        self.assertFalse(is_chat_llm_model("stabilityai/stable-diffusion-xl-base-1.0"))
+        self.assertFalse(is_chat_llm_model("openai/whisper-large-v3"))
+        self.assertFalse(is_chat_llm_model("BAAI/bge-m3"))
+        self.assertFalse(is_chat_llm_model("intfloat/multilingual-e5-large"))
+
+        # Valid chat LLMs must be accepted
+        self.assertTrue(is_chat_llm_model("openai/gpt-oss-120b"))
+        self.assertTrue(is_chat_llm_model("meta-llama/Meta-Llama-3-8B-Instruct"))
+        self.assertTrue(is_chat_llm_model("mistralai/Mistral-7B-Instruct-v0.3"))
+
+        # Non-chat model in get_effective_aselix_config should fallback to openai/gpt-oss-120b
+        _, _, eff_model, _ = get_effective_aselix_config(model="FLUX.2-dev")
+        self.assertEqual(eff_model, "openai/gpt-oss-120b")
+
+        # fetch_aselix_models endpoint should filter out FLUX/whisper and prioritize openai/gpt-oss-120b
+        res = self.client.get("/api/aselix/models")
+        self.assertEqual(res.status_code, 200)
+        models = res.json().get("modeller", [])
+        self.assertIn("openai/gpt-oss-120b", models)
+        self.assertEqual(models[0], "openai/gpt-oss-120b")
+        for m in models:
+            self.assertTrue(is_chat_llm_model(m), f"Non-chat model leaked into models list: {m}")
+
 
 if __name__ == "__main__":
     unittest.main()
