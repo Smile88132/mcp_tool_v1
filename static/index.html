@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/index.css?v=v12_bulk_and_home_fix">
+  <link rel="stylesheet" href="/static/index.css?v=v13_manual_match">
 </head>
 <body class="light-theme on-home-page">
   <!-- Glow Background Accents -->
@@ -909,19 +909,40 @@
           </div>
 
           <div class="table-actions">
-            <div class="search-input-wrapper">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
-              <input type="text" id="tableSearchInput" placeholder="Kayıtlar içinde ara..." class="search-input">
-            </div>
             <button class="btn btn-secondary btn-sm" id="btnExportCSV" title="Tabloyu CSV Olarak İndir">
               ⬇️ CSV
             </button>
             <button class="btn btn-secondary btn-sm" id="btnExportJSON" title="Tabloyu JSON Olarak İndir">
               ⬇️ JSON
             </button>
+          </div>
+        </div>
+
+        <!-- Her İki Belgede Arama + Ctrl ile Manuel Eşleştirme Çubuğu -->
+        <div class="manual-match-bar">
+          <div class="manual-match-search">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="tableSearchInput" class="manual-match-search-input" autocomplete="off"
+              placeholder="Her iki belgenin maddelerinde ara (1. Belge + 2. Belge)...">
+            <button type="button" class="manual-match-search-clear" id="btnClearTableSearch" title="Aramayı temizle" style="display: none;">✕</button>
+          </div>
+          <div class="manual-match-hint" id="manualMatchHint">
+            💡 <kbd>Ctrl</kbd> basılı tutup bir <b>1. Belge</b> ve bir <b>2. Belge</b> satırına tıklayın, ardından <b>Eşleştir</b>'e basın.
+            Seçimi kaldırmak için <kbd>Ctrl</kbd> + tekrar tıklayın (<kbd>Esc</kbd> tümünü temizler). Arama değişse de seçim korunur.
+          </div>
+          <div class="manual-match-actions" id="manualMatchActions" style="display: none;">
+            <div class="manual-match-selection">
+              <span class="manual-match-chip chip-a" id="manualMatchChipA"></span>
+              <span class="manual-match-link-icon">↔</span>
+              <span class="manual-match-chip chip-b" id="manualMatchChipB"></span>
+            </div>
+            <div class="manual-match-buttons">
+              <button type="button" class="btn-manual-match" id="btnManualMatch" style="display: none;">🔗 Eşleştir</button>
+              <button type="button" class="btn-manual-match-clear" id="btnManualMatchClear">Seçimi Temizle</button>
+            </div>
           </div>
         </div>
 
@@ -950,6 +971,7 @@
                     <option value="all">Tüm Durumlar</option>
                     <option value="exact">✓ %100 Tam Eşleşme</option>
                     <option value="fuzzy">≈ Kısmi Benzer (&lt;%100)</option>
+                    <option value="manual">🤝 Manuel Eşleşme</option>
                     <option value="only_a">🔵 Yalnızca 1. Belge</option>
                     <option value="only_b">🟣 Yalnızca 2. Belge</option>
                   </select>
@@ -1561,6 +1583,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=v12_milli_ag_only"></script>
+  <script src="/static/app.js?v=v13_manual_match"></script>
 </body>
 </html>

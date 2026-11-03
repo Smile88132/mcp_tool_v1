@@ -121,6 +121,8 @@
   let previewData1 = null;
   let previewData2 = null;
   let currentAnalysis = null;
+  // Manuel eşleştirme seçimi (Ctrl + tık): metin bazlı tutulur, böylece arama/filtre değişse de korunur
+  let manualSelection = { a: null, b: null };
   let currentFilter = 'all';
 
   // Kokpit SSO / Iframe Push Identity & External Inputs State
@@ -242,6 +244,13 @@
   const tabFilterB = document.getElementById('tabFilterB');
   const tabFilterDeclined = document.getElementById('tabFilterDeclined');
   const tableSearchInput = document.getElementById('tableSearchInput');
+  const btnClearTableSearch = document.getElementById('btnClearTableSearch');
+  const manualMatchHint = document.getElementById('manualMatchHint');
+  const manualMatchActions = document.getElementById('manualMatchActions');
+  const manualMatchChipA = document.getElementById('manualMatchChipA');
+  const manualMatchChipB = document.getElementById('manualMatchChipB');
+  const btnManualMatch = document.getElementById('btnManualMatch');
+  const btnManualMatchClear = document.getElementById('btnManualMatchClear');
   const colFilterDoc1 = document.getElementById('colFilterDoc1');
   const colFilterDoc2 = document.getElementById('colFilterDoc2');
   const colFilterStatus = document.getElementById('colFilterStatus');
@@ -619,9 +628,42 @@
             delDetailBtn.dataset.idx !== undefined ? parseInt(delDetailBtn.dataset.idx, 10) : -1,
             delDetailBtn.dataset.itemText || ''
           );
+          return;
+        }
+
+        // Ctrl (veya Mac'te Cmd) + tık: Manuel eşleştirme için satır seç / seçimi kaldır
+        if (e.ctrlKey || e.metaKey) {
+          if (e.target.closest('button, a, input, select')) return;
+          const tr = e.target.closest('tr[data-region]');
+          if (!tr) return;
+          e.preventDefault();
+          toggleManualSelection(tr.dataset.region, parseInt(tr.dataset.rawIdx, 10));
         }
       });
+      // Ctrl + tık sırasında metin seçimini engelle
+      detailsTableBody.addEventListener('mousedown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.target.closest('tr[data-region]')) e.preventDefault();
+      });
     }
+
+    // Manuel eşleştirme butonları ve klavye kısayolları
+    if (btnManualMatch) btnManualMatch.addEventListener('click', () => applyManualMatch());
+    if (btnManualMatchClear) btnManualMatchClear.addEventListener('click', () => clearManualSelection());
+    if (btnClearTableSearch) {
+      btnClearTableSearch.addEventListener('click', () => {
+        tableSearchInput.value = '';
+        renderTableRows();
+        tableSearchInput.focus();
+      });
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Control' || e.key === 'Meta') document.body.classList.add('ctrl-held');
+      if (e.key === 'Escape' && (manualSelection.a || manualSelection.b)) clearManualSelection();
+    });
+    document.addEventListener('keyup', (e) => {
+      if (e.key === 'Control' || e.key === 'Meta') document.body.classList.remove('ctrl-held');
+    });
+    window.addEventListener('blur', () => document.body.classList.remove('ctrl-held'));
 
     // Detail table column filters
     if (colFilterDoc1) colFilterDoc1.addEventListener('input', () => renderTableRows());
@@ -1673,6 +1715,7 @@
 
   function renderAnalysisResults(data) {
     currentAnalysis = data;
+    manualSelection = { a: null, b: null };
     resultsSection.style.display = 'block';
     resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -1961,8 +2004,152 @@
     refreshVennMetricsAndDiagram();
   }
 
+  // --------------------------------------------------------------------------
+  // Manuel Eşleştirme (Ctrl + Tık ile 1. Belge ve 2. Belge satırı seçip eşleştirme)
+  // --------------------------------------------------------------------------
+  function normalizeForSimilarity(s) {
+    return String(s || '')
+      .toLocaleLowerCase('tr-TR')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // Dice (karakter bigram) benzerliği: manuel eşleşmelerde bilgi amaçlı % değeri üretir
+  function diceSimilarityPercent(a, b) {
+    const x = normalizeForSimilarity(a);
+    const y = normalizeForSimilarity(b);
+    if (!x || !y) return 0;
+    if (x === y) return 100;
+    if (x.length < 2 || y.length < 2) return 0;
+    const bigrams = new Map();
+    for (let i = 0; i < x.length - 1; i++) {
+      const bg = x.substr(i, 2);
+      bigrams.set(bg, (bigrams.get(bg) || 0) + 1);
+    }
+    let inter = 0;
+    for (let i = 0; i < y.length - 1; i++) {
+      const bg = y.substr(i, 2);
+      const cnt = bigrams.get(bg) || 0;
+      if (cnt > 0) {
+        bigrams.set(bg, cnt - 1);
+        inter++;
+      }
+    }
+    return Math.round((2 * inter / ((x.length - 1) + (y.length - 1))) * 100);
+  }
+
+  function toggleManualSelection(region, rawIdx) {
+    if (!currentAnalysis || !currentAnalysis.venn_verileri) return;
+    const v = currentAnalysis.venn_verileri;
+
+    if (region !== 'only_a' && region !== 'only_b') {
+      flashManualMatchHint('⚠️ Yalnızca eşleşmemiş satırlar (Yalnızca 1. Belge / Yalnızca 2. Belge) manuel eşleştirilebilir. Eşleşmiş bir satırı yeniden eşleştirmek için önce "Benzer Değil" ile ayırın.');
+      return;
+    }
+
+    const list = region === 'only_a' ? (v.only_a_items || []) : (v.only_b_items || []);
+    if (isNaN(rawIdx) || rawIdx < 0 || rawIdx >= list.length) return;
+    const text = list[rawIdx];
+    const key = region === 'only_a' ? 'a' : 'b';
+
+    // Aynı satıra Ctrl + tık: seçimi kaldır; farklı satır: o belge için seçimi değiştir
+    manualSelection[key] = (manualSelection[key] === text) ? null : text;
+
+    updateManualMatchBar();
+    renderTableRows();
+  }
+
+  function clearManualSelection() {
+    manualSelection = { a: null, b: null };
+    updateManualMatchBar();
+    renderTableRows();
+  }
+
+  // Veri değiştiğinde artık eşleşmemiş listelerde olmayan seçimleri temizle
+  function pruneManualSelection() {
+    const v = currentAnalysis && currentAnalysis.venn_verileri;
+    if (!v) {
+      manualSelection = { a: null, b: null };
+      return;
+    }
+    if (manualSelection.a && !(v.only_a_items || []).includes(manualSelection.a)) manualSelection.a = null;
+    if (manualSelection.b && !(v.only_b_items || []).includes(manualSelection.b)) manualSelection.b = null;
+  }
+
+  let manualHintTimer = null;
+  function flashManualMatchHint(msg) {
+    if (!manualMatchHint) return;
+    if (!manualMatchHint.dataset.defaultHtml) manualMatchHint.dataset.defaultHtml = manualMatchHint.innerHTML;
+    manualMatchHint.textContent = msg;
+    manualMatchHint.classList.add('hint-warning');
+    clearTimeout(manualHintTimer);
+    manualHintTimer = setTimeout(() => {
+      manualMatchHint.innerHTML = manualMatchHint.dataset.defaultHtml;
+      manualMatchHint.classList.remove('hint-warning');
+    }, 4000);
+  }
+
+  function updateManualMatchBar() {
+    if (!manualMatchActions) return;
+    const { a, b } = manualSelection;
+    const hasAny = !!(a || b);
+    manualMatchActions.style.display = hasAny ? 'flex' : 'none';
+    if (manualMatchHint && !manualMatchHint.classList.contains('hint-warning')) {
+      manualMatchHint.style.display = hasAny ? 'none' : 'block';
+    }
+
+    const truncate = (s) => (s.length > 70 ? s.slice(0, 67) + '…' : s);
+    if (manualMatchChipA) {
+      manualMatchChipA.textContent = a ? `1. Belge: ${truncate(a)}` : '1. Belge: Ctrl + tık ile seçin';
+      manualMatchChipA.title = a || '';
+      manualMatchChipA.classList.toggle('chip-empty', !a);
+    }
+    if (manualMatchChipB) {
+      manualMatchChipB.textContent = b ? `2. Belge: ${truncate(b)}` : '2. Belge: Ctrl + tık ile seçin';
+      manualMatchChipB.title = b || '';
+      manualMatchChipB.classList.toggle('chip-empty', !b);
+    }
+    if (btnManualMatch) {
+      btnManualMatch.style.display = (a && b) ? 'inline-flex' : 'none';
+      if (a && b) btnManualMatch.textContent = `🔗 Eşleştir (%${diceSimilarityPercent(a, b)} metin benzerliği)`;
+    }
+  }
+
+  function applyManualMatch() {
+    if (!currentAnalysis || !currentAnalysis.venn_verileri) return;
+    const v = currentAnalysis.venn_verileri;
+    const { a, b } = manualSelection;
+    if (!a || !b) return;
+
+    const aIdx = (v.only_a_items || []).indexOf(a);
+    const bIdx = (v.only_b_items || []).indexOf(b);
+    if (aIdx < 0 || bIdx < 0) {
+      clearManualSelection();
+      return;
+    }
+
+    v.only_a_items.splice(aIdx, 1);
+    v.only_b_items.splice(bIdx, 1);
+    if (!Array.isArray(v.matched_pairs)) v.matched_pairs = [];
+    v.matched_pairs.push({
+      item_a: a,
+      item_b: b,
+      similarity: diceSimilarityPercent(a, b),
+      match_type: 'Kullanıcı Eşleştirmesi (Manuel)',
+      manual: true,
+      source: 'manual'
+    });
+
+    manualSelection = { a: null, b: null };
+    updateManualMatchBar();
+    refreshVennMetricsAndDiagram();
+  }
+
   function renderTableRows() {
     if (!currentAnalysis) return;
+    pruneManualSelection();
+    updateManualMatchBar();
 
     const v = currentAnalysis.venn_verileri;
     const query = tableSearchInput.value.toLowerCase().trim();
@@ -1994,6 +2181,7 @@
           similarity: p.similarity,
           region: 'intersection',
           matchType: p.match_type,
+          manual: !!p.manual,
           pairIdx: pIdx,
           rawIdx: pIdx
         });
@@ -2029,13 +2217,12 @@
       }
     }
 
-    // Filter by General Search Query
+    // Filter by General Search Query (her iki belgenin maddelerinde arar)
+    if (btnClearTableSearch) btnClearTableSearch.style.display = query ? 'inline-flex' : 'none';
     if (query) {
-      rows = rows.filter(r => (
-        (r.itemA && r.itemA.toLowerCase().includes(query)) ||
-        (r.itemB && r.itemB.toLowerCase().includes(query)) ||
-        (r.matchType && r.matchType.toLowerCase().includes(query))
-      ));
+      const q = query.toLocaleLowerCase('tr-TR');
+      const hit = (s) => !!s && s !== '-' && (s.toLowerCase().includes(query) || s.toLocaleLowerCase('tr-TR').includes(q));
+      rows = rows.filter(r => hit(r.itemA) || hit(r.itemB));
     }
 
     // Filter by Column 1 (1. Belge)
@@ -2054,6 +2241,8 @@
         rows = rows.filter(r => r.region === 'intersection' && r.similarity >= 99.5);
       } else if (statusFilter === 'fuzzy') {
         rows = rows.filter(r => r.region === 'intersection' && r.similarity < 99.5);
+      } else if (statusFilter === 'manual') {
+        rows = rows.filter(r => r.region === 'intersection' && r.manual);
       } else if (statusFilter === 'only_a') {
         rows = rows.filter(r => r.region === 'only_a');
       } else if (statusFilter === 'only_b') {
@@ -2081,7 +2270,9 @@
       let primaryBtnHtml = '';
 
       if (r.region === 'intersection') {
-        if (r.similarity >= 99.5) {
+        if (r.manual) {
+          badgeHtml = `<span class="badge-similarity-manual" title="Kullanıcı tarafından manuel eşleştirildi">🤝 Manuel Eşleşme (%${r.similarity})</span>`;
+        } else if (r.similarity >= 99.5) {
           badgeHtml = `<span class="badge-similarity-exact">✓ %100 Tam Eşleşme</span>`;
         } else {
           badgeHtml = `<span class="badge-similarity-fuzzy">≈ %${r.similarity} Benzer</span>`;
@@ -2112,9 +2303,20 @@
         ? `<div style="display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end;">${primaryBtnHtml}${adminDeleteBtnHtml}</div>`
         : `<span style="color: var(--text-dim); font-size: 11.5px;">—</span>`;
 
+      const isSelectable = r.region === 'only_a' || r.region === 'only_b';
+      const isSelected = (r.region === 'only_a' && manualSelection.a === r.itemA) ||
+        (r.region === 'only_b' && manualSelection.b === r.itemB);
+      const rowClasses = [
+        isSelectable ? 'row-manual-selectable' : '',
+        isSelected ? (r.region === 'only_a' ? 'row-manual-selected row-selected-a' : 'row-manual-selected row-selected-b') : ''
+      ].filter(Boolean).join(' ');
+      const rowTitle = isSelectable
+        ? (isSelected ? 'Seçili – Ctrl + tık ile seçimi kaldırın' : 'Ctrl + tık ile manuel eşleştirme için seçin')
+        : '';
+
       return `
-        <tr>
-          <td style="color: var(--text-dim); font-family: var(--font-mono);">${idx + 1}</td>
+        <tr class="${rowClasses}" data-region="${r.region}" data-raw-idx="${r.rawIdx}" title="${rowTitle}">
+          <td style="color: var(--text-dim); font-family: var(--font-mono);">${isSelected ? '✔' : idx + 1}</td>
           <td style="font-weight: ${r.itemA !== '-' ? '500' : 'normal'}; color: ${r.itemA === '-' ? 'var(--text-dim)' : 'var(--text-main)'};">
             ${escapeHtml(r.itemA)}
           </td>

@@ -4047,3 +4047,240 @@ body.light-theme.on-home-page .portal-standalone-view {
 
 
 
+
+
+/* ==========================================================================
+   Her İki Belgede Arama + Ctrl ile Manuel Eşleştirme
+   ========================================================================== */
+.manual-match-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.04), rgba(124, 58, 237, 0.04));
+}
+
+.manual-match-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.manual-match-search svg {
+  position: absolute;
+  left: 14px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.manual-match-search-input {
+  width: 100%;
+  padding: 11px 40px 11px 42px;
+  font-size: 14px;
+  border: 1px solid var(--border-medium);
+  border-radius: 10px;
+  background: var(--bg-card, #fff);
+  color: var(--text-main);
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.manual-match-search-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.manual-match-search-clear {
+  position: absolute;
+  right: 10px;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(100, 116, 139, 0.15);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.manual-match-search-clear:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+
+.manual-match-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.manual-match-hint.hint-warning {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.manual-match-hint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border: 1px solid var(--border-medium);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-card, #fff);
+  color: var(--text-main);
+}
+
+.manual-match-actions {
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.manual-match-selection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.manual-match-chip {
+  display: inline-block;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.manual-match-chip.chip-a {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  border: 1px solid rgba(37, 99, 235, 0.4);
+}
+
+.manual-match-chip.chip-b {
+  background: rgba(219, 39, 119, 0.1);
+  color: #be185d;
+  border: 1px solid rgba(219, 39, 119, 0.4);
+}
+
+.manual-match-chip.chip-empty {
+  background: transparent;
+  color: var(--text-dim);
+  border-style: dashed;
+  font-weight: 500;
+}
+
+.manual-match-link-icon {
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.manual-match-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-manual-match {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35);
+  animation: manualMatchPop 0.22s ease-out;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btn-manual-match:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(79, 70, 229, 0.45);
+}
+
+@keyframes manualMatchPop {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.btn-manual-match-clear {
+  padding: 8px 14px;
+  border: 1px solid var(--border-medium);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-manual-match-clear:hover {
+  border-color: #ef4444;
+  color: #dc2626;
+}
+
+/* Ctrl basılıyken seçilebilir satırlar vurgulanır */
+body.ctrl-held #detailsTableBody tr.row-manual-selectable {
+  cursor: copy;
+}
+
+body.ctrl-held #detailsTableBody tr.row-manual-selectable:hover td {
+  background: rgba(37, 99, 235, 0.06);
+}
+
+#detailsTableBody tr.row-manual-selected td {
+  transition: background 0.15s ease;
+}
+
+#detailsTableBody tr.row-selected-a td {
+  background: rgba(37, 99, 235, 0.12) !important;
+}
+
+#detailsTableBody tr.row-selected-a td:first-child {
+  box-shadow: inset 4px 0 0 #2563eb;
+  color: #2563eb !important;
+  font-weight: 700;
+}
+
+#detailsTableBody tr.row-selected-b td {
+  background: rgba(219, 39, 119, 0.1) !important;
+}
+
+#detailsTableBody tr.row-selected-b td:first-child {
+  box-shadow: inset 4px 0 0 #db2777;
+  color: #db2777 !important;
+  font-weight: 700;
+}
+
+.badge-similarity-manual {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  background: rgba(124, 58, 237, 0.12);
+  color: #6d28d9;
+  border: 1px solid rgba(124, 58, 237, 0.35);
+  border-radius: 999px;
+}
+
+.dark-theme .manual-match-chip.chip-a { color: #93c5fd; }
+.dark-theme .manual-match-chip.chip-b { color: #f9a8d4; }
+.dark-theme .badge-similarity-manual { color: #c4b5fd; }
