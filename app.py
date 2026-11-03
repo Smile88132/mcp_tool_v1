@@ -900,20 +900,31 @@ def get_effective_aselix_config(
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    timeout: Optional[int] = None
+    timeout: Optional[int] = None,
+    session_id: Optional[str] = None
 ) -> Tuple[str, str, str, int]:
     """
     AselixAI çağrıları için en uygun yapılandırmayı belirler.
     Öncelik Sırası:
       1. Çağrı parametresi
       2. .env / os.environ ortam değişkenleri (ASELIX_*)
-      3. Kokpit SSO Token (KOKPIT_IDENTITY_STORE["jwt_token"])
-      4. Yerleşik varsayılanlar (Milli Ağ, aselix-llm-v1, 90 sn)
+      3. Oturuma ait Kokpit SSO Token (ACTIVE_SESSIONS[session_id]["jwt_token"])
+      4. Genel Kokpit SSO Token (KOKPIT_IDENTITY_STORE["jwt_token"])
+      5. Yerleşik varsayılanlar (Milli Ağ, aselix-llm-v1, 90 sn)
     """
     eff_url = (base_url or "").strip() or os.getenv("ASELIX_BASE_URL", "").strip() or ASELIX_MILLI_BASE_URL
     eff_url = eff_url.rstrip("/")
 
-    eff_key = (api_key or "").strip() or os.getenv("ASELIX_API_KEY", "").strip() or (KOKPIT_IDENTITY_STORE.get("jwt_token") or "").strip()
+    sess_token = None
+    if session_id and "ACTIVE_SESSIONS" in globals() and str(session_id).strip() in ACTIVE_SESSIONS:
+        sess_token = ACTIVE_SESSIONS[str(session_id).strip()].get("jwt_token")
+
+    eff_key = (
+        (api_key or "").strip()
+        or os.getenv("ASELIX_API_KEY", "").strip()
+        or (sess_token or "").strip()
+        or (KOKPIT_IDENTITY_STORE.get("jwt_token") or "").strip()
+    )
 
     eff_model = (model or "").strip() or os.getenv("ASELIX_MODEL", "").strip() or "aselix-llm-v1"
 
@@ -1739,6 +1750,65 @@ KOKPIT_IDENTITY_STORE: Dict[str, Any] = {
     "history": []
 }
 
+# Çok kullanıcılı oturum izolasyonu: Her tarayıcı sekmesi / kullanıcısı için bağımsız session deposu
+ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+
+def get_or_create_session(session_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Belirtilen session_id için oturum nesnesini getirir veya yenisini üretir.
+    Çok kullanıcılı ortamda oturumların birbirini ezmesini engeller.
+    """
+    global ACTIVE_SESSIONS
+    clean_sid = str(session_id).strip() if session_id and str(session_id).strip() else None
+    if not clean_sid:
+        clean_sid = f"sess_{int(datetime.now(timezone.utc).timestamp() * 1000)}_{uuid.uuid4().hex[:8]}"
+    if clean_sid not in ACTIVE_SESSIONS:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        ACTIVE_SESSIONS[clean_sid] = {
+            "session_id": clean_sid,
+            "current_user": None,
+            "jwt_token": None,
+            "token_claims": None,
+            "source": None,
+            "origin": None,
+            "status": "waiting",
+            "timestamp": now_iso,
+            "updated_at": now_iso,
+            "external_inputs": {},
+            "history": []
+        }
+    return ACTIVE_SESSIONS[clean_sid]
+
+
+def resolve_session_from_request(
+    request: Optional[Any] = None,
+    explicit_session_id: Optional[str] = None
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    İstek başlıklarından (X-Session-ID), cookie'den (vennflow_session_id),
+    query parametresinden (?session_id=...) veya parametreden oturumu çözer.
+    """
+    candidate_sid = None
+    if explicit_session_id and str(explicit_session_id).strip():
+        candidate_sid = str(explicit_session_id).strip()
+    elif request is not None:
+        if hasattr(request, "state") and getattr(request.state, "session_id", None):
+            candidate_sid = str(request.state.session_id).strip()
+        elif hasattr(request, "headers"):
+            candidate_sid = (
+                request.headers.get("x-session-id")
+                or request.headers.get("x-kokpit-session-id")
+                or request.headers.get("session_id")
+            )
+        if not candidate_sid and hasattr(request, "query_params") and "session_id" in request.query_params:
+            candidate_sid = str(request.query_params.get("session_id")).strip()
+        if not candidate_sid and hasattr(request, "cookies") and "vennflow_session_id" in request.cookies:
+            candidate_sid = str(request.cookies.get("vennflow_session_id")).strip()
+
+    sess = get_or_create_session(candidate_sid)
+    return sess["session_id"], sess
+
 
 def decode_jwt_payload_unverified(token: Optional[str]) -> Dict[str, Any]:
     """
@@ -1873,11 +1943,13 @@ def normalize_kokpit_user(raw_user: Optional[Dict[str, Any]], token: Optional[st
 
 def store_kokpit_identity_and_inputs(
     payload: Dict[str, Any],
-    origin: Optional[str] = None
+    origin: Optional[str] = None,
+    session_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Hem Rehber Bölüm 4/5.C'deki `kokpit-identity` paketini hem de dışarıdan gelen
     ekstra input/config/embedding parametrelerini işler ve oturuma kaydeder.
+    Çok kullanıcılı izolasyon için hedef oturumda saklar.
     """
     raw_user = payload.get("user")
     token = payload.get("token") or payload.get("auth_token") or payload.get("jwt_token")
@@ -1908,26 +1980,43 @@ def store_kokpit_identity_and_inputs(
     user = normalize_kokpit_user(raw_user, token) if (raw_user or token) else None
     claims = decode_jwt_payload_unverified(token)
     now_iso = datetime.now(timezone.utc).isoformat()
-    session_id = payload.get("session_id") or KOKPIT_IDENTITY_STORE.get("session_id") or str(uuid.uuid4())
+    target_sid = session_id or payload.get("session_id") or KOKPIT_IDENTITY_STORE.get("session_id")
+    sess = get_or_create_session(target_sid)
+    actual_session_id = sess["session_id"]
 
+    # Oturum verilerini güncelle
     if user and (user.get("sicil") or user.get("username") or user.get("isim") or user.get("id") is not None):
+        sess["current_user"] = user
         KOKPIT_IDENTITY_STORE["current_user"] = user
         if user.get("sicil"):
             KOKPIT_IDENTITY_STORE["sessions_by_sicil"][str(user["sicil"])] = {
                 "user": user,
                 "token": token,
                 "updated_at": now_iso,
-                "session_id": session_id
+                "session_id": actual_session_id
             }
 
     if token:
+        sess["jwt_token"] = token
+        sess["token_claims"] = claims
         KOKPIT_IDENTITY_STORE["jwt_token"] = token
         KOKPIT_IDENTITY_STORE["token_claims"] = claims
 
     if ext_inputs:
-        merged_inputs = dict(KOKPIT_IDENTITY_STORE.get("external_inputs") or {})
-        merged_inputs.update(ext_inputs)
-        KOKPIT_IDENTITY_STORE["external_inputs"] = merged_inputs
+        merged_sess_inputs = dict(sess.get("external_inputs") or {})
+        merged_sess_inputs.update(ext_inputs)
+        sess["external_inputs"] = merged_sess_inputs
+
+        merged_global_inputs = dict(KOKPIT_IDENTITY_STORE.get("external_inputs") or {})
+        merged_global_inputs.update(ext_inputs)
+        KOKPIT_IDENTITY_STORE["external_inputs"] = merged_global_inputs
+
+    sess["source"] = source
+    sess["type"] = msg_type
+    sess["origin"] = origin or payload.get("origin")
+    sess["status"] = status
+    sess["timestamp"] = timestamp
+    sess["updated_at"] = now_iso
 
     KOKPIT_IDENTITY_STORE["source"] = source
     KOKPIT_IDENTITY_STORE["type"] = msg_type
@@ -1935,7 +2024,7 @@ def store_kokpit_identity_and_inputs(
     KOKPIT_IDENTITY_STORE["status"] = status
     KOKPIT_IDENTITY_STORE["timestamp"] = timestamp
     KOKPIT_IDENTITY_STORE["updated_at"] = now_iso
-    KOKPIT_IDENTITY_STORE["session_id"] = session_id
+    KOKPIT_IDENTITY_STORE["session_id"] = actual_session_id
 
     history_entry = {
         "timestamp": now_iso,
@@ -1944,19 +2033,21 @@ def store_kokpit_identity_and_inputs(
         "sicil": user.get("sicil") if user else None,
         "isim": user.get("isim") if user else None,
         "has_token": bool(token),
-        "input_keys": list(ext_inputs.keys())
+        "input_keys": list(ext_inputs.keys()),
+        "session_id": actual_session_id
     }
+    sess["history"] = (sess.get("history", []) + [history_entry])[-25:]
     KOKPIT_IDENTITY_STORE["history"] = (KOKPIT_IDENTITY_STORE["history"] + [history_entry])[-25:]
 
     return {
-        "session_id": session_id,
-        "user": KOKPIT_IDENTITY_STORE["current_user"],
-        "token_present": bool(KOKPIT_IDENTITY_STORE["jwt_token"]),
-        "token_claims": KOKPIT_IDENTITY_STORE["token_claims"],
+        "session_id": actual_session_id,
+        "user": sess["current_user"],
+        "token_present": bool(sess["jwt_token"]),
+        "token_claims": sess["token_claims"],
         "source": source,
         "timestamp": timestamp,
         "updated_at": now_iso,
-        "external_inputs": KOKPIT_IDENTITY_STORE["external_inputs"]
+        "external_inputs": sess["external_inputs"]
     }
 
 
@@ -3676,6 +3767,7 @@ try:
            kesintisiz gömülebilmesi (embedding) için Content-Security-Policy frame-ancestors * başlığını ekler.
         2. Dışarıdan gelen tüm kökenleri (CORS) ve API taleplerini onay beklemeden doğrudan kabul eder.
         3. İsteklerde gelen Authorization: Bearer <token>, X-Kokpit-Token başlıklarını veya query parametrelerini yakalar.
+        4. Çok kullanıcılı oturum izolasyonu: Her bağlantıya veya sekmeye ait X-Session-ID / cookie ile oturum eşler.
         """
         if request.method == "OPTIONS":
             resp = Response(status_code=200)
@@ -3685,15 +3777,23 @@ try:
             resp.headers["Content-Security-Policy"] = "frame-ancestors * http: https: data: blob:;"
             return resp
 
+        # Oturum ID'sini istek başlıklarından, query parametresinden veya cookie'den çöz
+        session_id, sess = resolve_session_from_request(request)
+        request.state.session_id = session_id
+
         auth_header = request.headers.get("authorization") or request.headers.get("x-kokpit-token")
         if auth_header:
             token_val = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else auth_header.strip()
-            if token_val and token_val != KOKPIT_IDENTITY_STORE.get("jwt_token"):
+            if token_val and token_val != sess.get("jwt_token"):
+                sess["jwt_token"] = token_val
+                sess["token_claims"] = decode_jwt_payload_unverified(token_val)
                 KOKPIT_IDENTITY_STORE["jwt_token"] = token_val
-                KOKPIT_IDENTITY_STORE["token_claims"] = decode_jwt_payload_unverified(token_val)
-                if not KOKPIT_IDENTITY_STORE.get("current_user"):
+                KOKPIT_IDENTITY_STORE["token_claims"] = sess["token_claims"]
+                if not sess.get("current_user"):
                     inferred_user = normalize_kokpit_user({}, token_val)
                     if inferred_user.get("sicil") or inferred_user.get("username") or inferred_user.get("isim"):
+                        sess["current_user"] = inferred_user
+                        sess["status"] = "success"
                         KOKPIT_IDENTITY_STORE["current_user"] = inferred_user
                         KOKPIT_IDENTITY_STORE["status"] = "success"
 
@@ -3710,6 +3810,9 @@ try:
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
         response.headers["Access-Control-Allow-Headers"] = "*"
         response.headers["Access-Control-Expose-Headers"] = "*"
+        response.headers["X-Session-ID"] = session_id
+        if "vennflow_session_id" not in request.cookies or request.cookies.get("vennflow_session_id") != session_id:
+            response.set_cookie("vennflow_session_id", session_id, path="/", samesite="lax")
         return response
 
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -3918,17 +4021,24 @@ try:
                     "role": "User"
                 }
 
+        req_sid = (
+            body.get("session_id")
+            or getattr(request.state, "session_id", None)
+            or request.headers.get("x-session-id")
+            or request.cookies.get("vennflow_session_id")
+        )
         origin = request.headers.get("origin") or body.get("origin") or "*"
         stored = store_kokpit_identity_and_inputs(
             body if "user" in body else {**body, "user": raw_user},
-            origin=origin
+            origin=origin,
+            session_id=req_sid
         )
         user_obj = stored.get("user") or {}
         isim_display = user_obj.get("isim") or user_obj.get("username") or user_obj.get("sicil") or "Kullanıcı"
 
         _safe_log(
             f"[KOKPIT-IDENTITY] Kimlik/Input alındı: {isim_display} "
-            f"(Sicil: {user_obj.get('sicil', '-')}, Kaynak: {stored.get('source')})"
+            f"(Sicil: {user_obj.get('sicil', '-')}, Kaynak: {stored.get('source')}, Session: {stored.get('session_id')})"
         )
 
         return {
@@ -3945,45 +4055,64 @@ try:
         }
 
     @web_app.get("/api/identity")
-    async def api_get_identity(request: Request, sicil: Optional[str] = None):
+    async def api_get_identity(
+        request: Request,
+        session_id: Optional[str] = None,
+        sicil: Optional[str] = None
+    ):
         """
         Mevcut aktif Kokpit oturumunu, kullanıcı profilini ve dışarıdan iletilmiş
-        input/embedding yapılandırmalarını döndürür.
+        input/embedding yapılandırmalarını oturum izolasyonlu olarak döndürür.
         """
-        user = KOKPIT_IDENTITY_STORE.get("current_user")
+        sid, sess = resolve_session_from_request(request, session_id)
+        user = sess.get("current_user")
         if sicil and str(sicil) in KOKPIT_IDENTITY_STORE.get("sessions_by_sicil", {}):
-            sess = KOKPIT_IDENTITY_STORE["sessions_by_sicil"][str(sicil)]
-            user = sess.get("user")
+            sess_by_s = KOKPIT_IDENTITY_STORE["sessions_by_sicil"][str(sicil)]
+            user = sess_by_s.get("user")
 
+        is_auth = bool(user)
         return {
-            "status": "success" if user else "waiting",
+            "status": "success" if is_auth else "waiting",
             "durum": "basarili",
-            "authenticated": bool(user),
-            "session_id": KOKPIT_IDENTITY_STORE.get("session_id"),
+            "authenticated": is_auth,
+            "session_id": sid,
             "user": user,
-            "token_present": bool(KOKPIT_IDENTITY_STORE.get("jwt_token")),
-            "token_claims": KOKPIT_IDENTITY_STORE.get("token_claims"),
-            "source": KOKPIT_IDENTITY_STORE.get("source"),
-            "origin": KOKPIT_IDENTITY_STORE.get("origin"),
-            "timestamp": KOKPIT_IDENTITY_STORE.get("timestamp"),
-            "updated_at": KOKPIT_IDENTITY_STORE.get("updated_at"),
-            "external_inputs": KOKPIT_IDENTITY_STORE.get("external_inputs") or {},
+            "token_present": bool(sess.get("jwt_token")),
+            "token_claims": sess.get("token_claims"),
+            "source": sess.get("source"),
+            "origin": sess.get("origin"),
+            "timestamp": sess.get("timestamp"),
+            "updated_at": sess.get("updated_at"),
+            "external_inputs": sess.get("external_inputs") or {},
             "allowed_origins": ALLOWED_KOKPIT_ORIGINS,
-            "history": KOKPIT_IDENTITY_STORE.get("history", [])[-10:]
+            "history": sess.get("history", [])[-10:]
         }
 
     @web_app.delete("/api/identity")
     @web_app.post("/api/identity/logout")
-    async def api_clear_identity():
+    async def api_clear_identity(
+        request: Request,
+        session_id: Optional[str] = None
+    ):
         """Aktif Kokpit kimlik oturumunu ve geçici dış inputları temizler."""
-        KOKPIT_IDENTITY_STORE["current_user"] = None
-        KOKPIT_IDENTITY_STORE["jwt_token"] = None
-        KOKPIT_IDENTITY_STORE["token_claims"] = None
-        KOKPIT_IDENTITY_STORE["status"] = "logged_out"
-        KOKPIT_IDENTITY_STORE["external_inputs"] = {}
+        sid, sess = resolve_session_from_request(request, session_id)
+        sess["current_user"] = None
+        sess["jwt_token"] = None
+        sess["token_claims"] = None
+        sess["status"] = "logged_out"
+        sess["external_inputs"] = {}
+
+        if KOKPIT_IDENTITY_STORE.get("session_id") == sid or not ACTIVE_SESSIONS:
+            KOKPIT_IDENTITY_STORE["current_user"] = None
+            KOKPIT_IDENTITY_STORE["jwt_token"] = None
+            KOKPIT_IDENTITY_STORE["token_claims"] = None
+            KOKPIT_IDENTITY_STORE["status"] = "logged_out"
+            KOKPIT_IDENTITY_STORE["external_inputs"] = {}
+
         return {
             "status": "success",
             "durum": "basarili",
+            "session_id": sid,
             "message": "Oturum ve dış input verileri temizlendi."
         }
 
@@ -3996,7 +4125,8 @@ try:
         """
         raw_dict = req.model_dump(exclude_none=True) if hasattr(req, "model_dump") else req.dict(exclude_none=True)
         origin = request.headers.get("origin")
-        stored = store_kokpit_identity_and_inputs(raw_dict, origin=origin)
+        sid, sess = resolve_session_from_request(request, raw_dict.get("session_id"))
+        stored = store_kokpit_identity_and_inputs(raw_dict, origin=origin, session_id=sid)
 
         comparison_result = None
         items_1 = req.items_1 or ([line.strip() for line in (req.text_1 or "").splitlines() if line.strip()] if req.text_1 else [])
@@ -4004,8 +4134,7 @@ try:
 
         if req.auto_compare and items_1 and items_2:
             engine = (req.engine_mode or "local").lower()
-            eff_key = req.api_key or KOKPIT_IDENTITY_STORE.get("jwt_token") or ""
-            eff_url = req.base_url or "https://api.aselixai.aselsan.com.tr/v1"
+            eff_url, eff_key, _, _ = get_effective_aselix_config(req.base_url, req.api_key, session_id=sid)
             thr = req.threshold if req.threshold is not None else 0.80
 
             if engine == "embedding" or (req.embeddings_1 and req.embeddings_2):
@@ -4046,13 +4175,15 @@ try:
         }
 
     @web_app.get("/api/external-input")
-    async def api_get_external_input():
+    async def api_get_external_input(request: Request, session_id: Optional[str] = None):
         """Dışarıdan gönderilmiş son input ve yapılandırma paketini döndürür."""
+        sid, sess = resolve_session_from_request(request, session_id)
         return {
             "status": "success",
             "durum": "basarili",
-            "user": KOKPIT_IDENTITY_STORE.get("current_user"),
-            "external_inputs": KOKPIT_IDENTITY_STORE.get("external_inputs") or {}
+            "session_id": sid,
+            "user": sess.get("current_user"),
+            "external_inputs": sess.get("external_inputs") or {}
         }
 
     @web_app.get("/api/bakiye-siparis/items")
@@ -4119,7 +4250,8 @@ try:
         if not isinstance(body, dict):
             return JSONResponse({"durum": "hata", "mesaj": "JSON nesnesi bekleniyor."}, status_code=400)
 
-        requester_user = KOKPIT_IDENTITY_STORE.get("current_user")
+        sid, sess = resolve_session_from_request(request)
+        requester_user = sess.get("current_user") or KOKPIT_IDENTITY_STORE.get("current_user")
         res = delete_dryrun_fkt_skt_kpi_record(body, requester_user=requester_user)
         if res.get("durum") == "yetkisiz":
             return JSONResponse(res, status_code=403)
@@ -4151,6 +4283,7 @@ try:
 
     @web_app.post("/api/bulk/analyze-excel")
     async def api_bulk_analyze_excel(
+        request: Request,
         file: UploadFile = File(...),
         engine_mode: str = Form("local"),
         threshold: float = Form(0.80),
@@ -4158,7 +4291,8 @@ try:
         default_kalem: Optional[str] = Form(""),
         base_url: Optional[str] = Form("https://api.aselixai.aselsan.com.tr/v1"),
         api_key: Optional[str] = Form(""),
-        embedding_model: Optional[str] = Form("text-embedding-3-small")
+        embedding_model: Optional[str] = Form("text-embedding-3-small"),
+        session_id: Optional[str] = Form(None)
     ):
         """
         Doldurulan şablon Excel dosyasını okur, satırlardaki SD/Kalem bilgisini arka planda
@@ -4167,7 +4301,8 @@ try:
         """
         try:
             f_bytes = await file.read()
-            eff_key = (api_key or "").strip() or (KOKPIT_IDENTITY_STORE.get("jwt_token") or "").strip()
+            sid, sess = resolve_session_from_request(request, session_id)
+            eff_key = (api_key or "").strip() or (sess.get("jwt_token") or "").strip() or (KOKPIT_IDENTITY_STORE.get("jwt_token") or "").strip()
             return analyze_bulk_uploaded_excel(
                 file_bytes=f_bytes,
                 filename=file.filename or "toplu_veri.xlsx",
@@ -4647,6 +4782,7 @@ try:
 
     @web_app.post("/api/compare/run")
     async def api_compare_run(
+        request: Request,
         input_mode: str = Form("excel"),
         engine_mode: str = Form("local"),
         threshold: float = Form(0.80),
@@ -4662,7 +4798,8 @@ try:
         api_key: Optional[str] = Form(""),
         model: Optional[str] = Form("aselix-llm-v1"),
         meta_1: Optional[str] = Form(None),
-        meta_2: Optional[str] = Form(None)
+        meta_2: Optional[str] = Form(None),
+        session_id: Optional[str] = Form(None)
     ):
         """
         Hem Excel dosyası yükleme hem de Metin Kopyala-Yapıştır (Copy-Paste) için evrensel kıyaslama çalıştırır:
@@ -4727,7 +4864,8 @@ try:
 
         ai_summary = ""
         ai_durum = "kapali"
-        eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(base_url, api_key, model)
+        sid, sess = resolve_session_from_request(request, session_id)
+        eff_url, eff_key, eff_model, eff_timeout = get_effective_aselix_config(base_url, api_key, model, session_id=sid)
         effective_key = eff_key
 
         if engine_mode == "aselix" and effective_key:
@@ -4838,7 +4976,7 @@ try:
                 ai_durum = "uyari"
 
         elif engine_mode == "embedding":
-            ext_in = KOKPIT_IDENTITY_STORE.get("external_inputs") or {}
+            ext_in = sess.get("external_inputs") or KOKPIT_IDENTITY_STORE.get("external_inputs") or {}
             ext_emb_a = ext_in.get("embeddings_1") or ext_in.get("embeddings_a")
             ext_emb_b = ext_in.get("embeddings_2") or ext_in.get("embeddings_b")
             emb_model_name = ext_in.get("embedding_model") or (model if model and "embed" in model.lower() else "text-embedding-3-small")
@@ -4896,7 +5034,8 @@ try:
             "flow_analiz_ozeti": ai_summary,
             "ai_durum": ai_durum,
             "model_kullanilan": model,
-            "kokpit_user": KOKPIT_IDENTITY_STORE.get("current_user")
+            "session_id": sid,
+            "kokpit_user": sess.get("current_user") or KOKPIT_IDENTITY_STORE.get("current_user")
         }
 
     @web_app.post("/api/compare/extract-items")

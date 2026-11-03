@@ -7,6 +7,48 @@
 (function () {
   'use strict';
 
+  // Oturum İzolasyonu (Her tarayıcı sekmesi ve yeni bağlantı için bağımsız session)
+  const SESSION_STORAGE_KEY = 'vennflow_session_id';
+
+  function getOrCreateSessionId() {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlSid = urlParams.get('session_id') || urlParams.get('sid');
+      if (urlSid && urlSid.trim()) {
+        const clean = urlSid.trim();
+        sessionStorage.setItem(SESSION_STORAGE_KEY, clean);
+        return clean;
+      }
+      let sid = sessionStorage.getItem(SESSION_STORAGE_KEY);
+      if (!sid || !sid.trim()) {
+        // Yeni bir bağlantı/sekme açıldığında bağımsız session ID üret
+        sid = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+        sessionStorage.setItem(SESSION_STORAGE_KEY, sid);
+      }
+      // Cookie senkronizasyonu
+      try {
+        document.cookie = `vennflow_session_id=${encodeURIComponent(sid)}; path=/; SameSite=Lax`;
+      } catch (_) {}
+      return sid;
+    } catch (_) {
+      return 'sess_fallback_' + Date.now();
+    }
+  }
+
+  const currentSessionId = getOrCreateSessionId();
+
+  // Otomatik HTTP Fetch Araya Girici (Tüm backend isteklerine X-Session-ID başlığı ekler)
+  const originalFetch = window.fetch;
+  window.fetch = function (resource, options = {}) {
+    const opts = { ...options };
+    const headers = new Headers(opts.headers || {});
+    if (!headers.has('X-Session-ID')) {
+      headers.set('X-Session-ID', currentSessionId);
+    }
+    opts.headers = headers;
+    return originalFetch.call(this, resource, opts);
+  };
+
   // Config State (LocalStorage backed)
   const STORAGE_KEY = 'vennflow_aselix_config_v2';
   const DEFAULT_ALLOWED_ORIGINS = [
@@ -784,25 +826,30 @@
   }
 
   // --------------------------------------------------------------------------
-  // Config & State Management
+  // Config & State Management (Oturum izolasyonlu: sessionStorage öncelikli)
   // --------------------------------------------------------------------------
   function loadConfig() {
     try {
+      const sessionStored = sessionStorage.getItem(STORAGE_KEY);
+      if (sessionStored) {
+        return { ...DEFAULT_CONFIG, ...JSON.parse(sessionStored) };
+      }
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         return { ...DEFAULT_CONFIG, ...JSON.parse(stored) };
       }
     } catch (e) {
-      console.warn('LocalStorage error:', e);
+      console.warn('Config load error:', e);
     }
     return { ...DEFAULT_CONFIG };
   }
 
   function saveConfig() {
     try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(appConfig));
       localStorage.setItem(STORAGE_KEY, JSON.stringify(appConfig));
     } catch (e) {
-      console.warn('LocalStorage save error:', e);
+      console.warn('Config save error:', e);
     }
   }
 
@@ -1476,6 +1523,7 @@
       formData.append('base_url', appConfig.baseUrl);
       formData.append('api_key', effectiveApiKey);
       formData.append('model', isEmbedding ? (appConfig.embeddingModel || 'text-embedding-3-small') : (appConfig.model || 'aselix-llm-v1'));
+      formData.append('session_id', currentSessionId);
 
       if (inputMode === 'excel') {
         formData.append('file_1', file1);
@@ -2399,6 +2447,7 @@
           type: 'kokpit-iframe-ready',
           source: 'vennflow-app',
           status: 'ready',
+          session_id: currentSessionId,
           timestamp: new Date().toISOString()
         }, '*');
       } catch (_) {}
@@ -2419,16 +2468,16 @@
             source: 'sessionStorage'
           };
           updateIdentityUI();
-          pushIdentityToBackend({ user: cachedUser, token: cachedToken, source: 'kokpit-iframe-bridge' });
+          pushIdentityToBackend({ user: cachedUser, token: cachedToken, source: 'kokpit-iframe-bridge', session_id: currentSessionId });
           return;
         } catch (_) {}
       }
 
-      // Backend'de aktif kimlik veya dış input var mı kontrol et
+      // Backend'de bu oturuma ait aktif kimlik veya dış input var mı kontrol et
       try {
-        const resp = await fetch('/api/identity');
+        const resp = await fetch(`/api/identity?session_id=${encodeURIComponent(currentSessionId)}`);
         const data = await resp.json();
-        if (data && data.user) {
+        if (data && data.authenticated && data.user) {
           kokpitIdentity = {
             user: data.user,
             token: kokpitIdentity.token || null,
@@ -2575,10 +2624,11 @@
 
   async function pushIdentityToBackend(payload) {
     try {
+      const enriched = { ...payload, session_id: currentSessionId };
       const resp = await fetch('/api/identity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(enriched)
       });
       const data = await resp.json();
       if (data && data.user && !kokpitIdentity.user) {
@@ -2709,6 +2759,7 @@
       }
 
       const fields = [
+        ['Oturum ID (Session)', currentSessionId],
         ['Ad Soyad (isim)', u.isim || '-'],
         ['Sicil No', u.sicil || '-'],
         ['Kullanıcı Adı', u.username || '-'],
@@ -2740,8 +2791,12 @@
       }
       identityDetailsGrid.innerHTML = `
         <div class="identity-kv" style="grid-column: span 2;">
+          <span class="identity-kv-label">Oturum ID (Session)</span>
+          <span class="identity-kv-val" style="font-family: monospace; color: var(--color-primary);">${escapeHtml(currentSessionId)}</span>
+        </div>
+        <div class="identity-kv" style="grid-column: span 2;">
           <span class="identity-kv-label">Durum</span>
-          <span class="identity-kv-val">Ana sistem (Kokpit) içerisine iframe olarak gömüldüğünde kimlik ve dış inputlar otomatik aktarılır.</span>
+          <span class="identity-kv-val">Bu oturum bağımsızdır. Ana sistem (Kokpit) içerisine iframe olarak gömüldüğünde kimlik ve dış inputlar otomatik bu sekmeye aktarılır.</span>
         </div>
       `;
     }
@@ -2856,7 +2911,13 @@
       externalInputs: {}
     };
     try {
-      await fetch('/api/identity', { method: 'DELETE' });
+      await fetch(`/api/identity?session_id=${encodeURIComponent(currentSessionId)}`, { method: 'DELETE' });
+    } catch (_) {}
+    // Yeni bağımsız session ID üret
+    const newSid = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+    try {
+      sessionStorage.setItem(SESSION_STORAGE_KEY, newSid);
+      document.cookie = `vennflow_session_id=${encodeURIComponent(newSid)}; path=/; SameSite=Lax`;
     } catch (_) {}
     updateIdentityUI();
     if (identityActionStatus) {
@@ -2864,7 +2925,7 @@
       identityActionStatus.style.background = 'var(--color-primary-subtle)';
       identityActionStatus.style.border = '1px solid rgba(37, 99, 235, 0.3)';
       identityActionStatus.style.color = 'var(--color-primary)';
-      identityActionStatus.textContent = 'ℹ️ Oturum ve dış input verileri temizlendi.';
+      identityActionStatus.textContent = 'ℹ️ Oturum ve dış input verileri temizlendi. Yeni oturum oluşturuldu.';
     }
   }
 
@@ -3720,6 +3781,7 @@
       fd.append('base_url', appConfig.baseUrl || '');
       fd.append('api_key', (appConfig.apiKey || '').trim() || (kokpitIdentity.token || '').trim());
       fd.append('embedding_model', appConfig.embeddingModel || 'text-embedding-3-small');
+      fd.append('session_id', currentSessionId);
 
       if (bulkFallbackBakiyeSelect && bulkFallbackBakiyeSelect.value && bulkFallbackBakiyeSelect.value.includes('|')) {
         const [defSd, defKalem] = bulkFallbackBakiyeSelect.value.split('|');

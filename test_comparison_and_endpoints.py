@@ -11,6 +11,13 @@ from app import execute_compare_two_excels, compare_two_excels_venn, extract_lan
 
 class TestTwoExcelComparison(unittest.TestCase):
     def setUp(self):
+        import app
+        app.ACTIVE_SESSIONS.clear()
+        app.KOKPIT_IDENTITY_STORE["current_user"] = None
+        app.KOKPIT_IDENTITY_STORE["jwt_token"] = None
+        app.KOKPIT_IDENTITY_STORE["token_claims"] = None
+        app.KOKPIT_IDENTITY_STORE["external_inputs"] = {}
+        app.KOKPIT_IDENTITY_STORE["sessions_by_sicil"] = {}
         # Create two simple test DataFrames
         self.df1 = pd.DataFrame({
             "Uygunsuzluk": ["Hata 1", "Hata 2", "Hata 3", "Ortak Hata A", "Ortak Hata B"]
@@ -656,6 +663,15 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
         import app
         self.client = TestClient(app.web_app)
 
+    def tearDown(self):
+        import app
+        app.ACTIVE_SESSIONS.clear()
+        app.KOKPIT_IDENTITY_STORE["current_user"] = None
+        app.KOKPIT_IDENTITY_STORE["jwt_token"] = None
+        app.KOKPIT_IDENTITY_STORE["token_claims"] = None
+        app.KOKPIT_IDENTITY_STORE["external_inputs"] = {}
+        app.KOKPIT_IDENTITY_STORE["sessions_by_sicil"] = {}
+
     def test_get_effective_aselix_config(self):
         import app
         # 1. Varsayılanlar
@@ -847,6 +863,136 @@ class TestAselixAIEnhancementsAndResilience(unittest.TestCase):
             self.assertEqual(data["durum"], "basarili")
             self.assertEqual(data["engine_mode"], "aselix")
             self.assertEqual(data["flow_analiz_ozeti"], "AselixAI Kök Neden Analizi Başarılı")
+
+
+class TestMultiUserSessionIsolation(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import app
+        self.client = TestClient(app.web_app)
+
+    def tearDown(self):
+        import app
+        app.ACTIVE_SESSIONS.clear()
+        app.KOKPIT_IDENTITY_STORE["current_user"] = None
+        app.KOKPIT_IDENTITY_STORE["jwt_token"] = None
+        app.KOKPIT_IDENTITY_STORE["token_claims"] = None
+        app.KOKPIT_IDENTITY_STORE["external_inputs"] = {}
+        app.KOKPIT_IDENTITY_STORE["sessions_by_sicil"] = {}
+
+    def test_multi_user_sessions_isolated(self):
+        # 1. Kullanıcı A oturum açar (Admin, Ahmet Yılmaz)
+        payload_a = {
+            "type": "kokpit-identity",
+            "source": "kokpit-iframe-bridge",
+            "user": {
+                "sicil": "12345",
+                "isim": "Ahmet Yılmaz",
+                "username": "ahmet.yilmaz",
+                "role": "Admin"
+            },
+            "token": "token-user-a",
+            "inputs": {"engine_mode": "aselix", "threshold": 85}
+        }
+        res_a = self.client.post("/api/identity", json=payload_a, headers={"X-Session-ID": "sess_user_a"})
+        self.assertEqual(res_a.status_code, 200)
+        self.assertEqual(res_a.json()["session_id"], "sess_user_a")
+
+        # 2. Kullanıcı B oturum açar (Standart Kullanıcı, Mehmet Kaya)
+        payload_b = {
+            "type": "kokpit-identity",
+            "source": "kokpit-iframe-bridge",
+            "user": {
+                "sicil": "67890",
+                "isim": "Mehmet Kaya",
+                "username": "mehmet.kaya",
+                "role": "User"
+            },
+            "token": "token-user-b",
+            "inputs": {"engine_mode": "local", "threshold": 75}
+        }
+        res_b = self.client.post("/api/identity", json=payload_b, headers={"X-Session-ID": "sess_user_b"})
+        self.assertEqual(res_b.status_code, 200)
+        self.assertEqual(res_b.json()["session_id"], "sess_user_b")
+
+        # 3. Kullanıcı C henüz kimlik göndermemiş yeni bir sekmedir
+        res_c = self.client.get("/api/identity", headers={"X-Session-ID": "sess_user_c"})
+        self.assertEqual(res_c.status_code, 200)
+        data_c = res_c.json()
+        self.assertFalse(data_c["authenticated"])
+        self.assertIsNone(data_c["user"])
+        self.assertEqual(data_c["status"], "waiting")
+        self.assertEqual(data_c["session_id"], "sess_user_c")
+
+        # 4. Kullanıcı A kendi oturumunu sorguladığında Ahmet Yılmaz döner
+        get_a = self.client.get("/api/identity", headers={"X-Session-ID": "sess_user_a"})
+        self.assertEqual(get_a.status_code, 200)
+        data_a = get_a.json()
+        self.assertTrue(data_a["authenticated"])
+        self.assertEqual(data_a["user"]["isim"], "Ahmet Yılmaz")
+        self.assertEqual(data_a["user"]["role"], "Admin")
+        self.assertEqual(data_a["external_inputs"]["threshold"], 85)
+
+        # 5. Kullanıcı B kendi oturumunu sorguladığında Mehmet Kaya döner
+        get_b = self.client.get("/api/identity", headers={"X-Session-ID": "sess_user_b"})
+        self.assertEqual(get_b.status_code, 200)
+        data_b = get_b.json()
+        self.assertTrue(data_b["authenticated"])
+        self.assertEqual(data_b["user"]["isim"], "Mehmet Kaya")
+        self.assertEqual(data_b["user"]["role"], "User")
+        self.assertEqual(data_b["external_inputs"]["threshold"], 75)
+
+    def test_refresh_simulation_preserves_session(self):
+        # Sayfa yenileme simülasyonu: Cookie veya başlık üzerinden aynı oturum korunmalıdır
+        res_first = self.client.get("/api/identity", headers={"X-Session-ID": "sess_persisted_tab"})
+        self.assertEqual(res_first.json()["session_id"], "sess_persisted_tab")
+
+        # Kimlik ekle
+        self.client.post("/api/identity", json={
+            "user": {"sicil": "11111", "isim": "Ayşe Demir", "role": "User"}
+        }, headers={"X-Session-ID": "sess_persisted_tab"})
+
+        # F5 / Yenileme: Aynı session_id ile tekrar çağrıldığında Ayşe Demir oturumu korunur
+        res_f5 = self.client.get("/api/identity", headers={"X-Session-ID": "sess_persisted_tab"})
+        self.assertTrue(res_f5.json()["authenticated"])
+        self.assertEqual(res_f5.json()["user"]["isim"], "Ayşe Demir")
+
+    def test_logout_isolation(self):
+        # A ve B oturumları açılır
+        self.client.post("/api/identity", json={"user": {"sicil": "A1", "isim": "User A"}}, headers={"X-Session-ID": "sess_logout_a"})
+        self.client.post("/api/identity", json={"user": {"sicil": "B1", "isim": "User B"}}, headers={"X-Session-ID": "sess_logout_b"})
+
+        # Yalnızca A oturumu kapatılır
+        del_a = self.client.delete("/api/identity", headers={"X-Session-ID": "sess_logout_a"})
+        self.assertEqual(del_a.status_code, 200)
+
+        # A oturumu kapalı (unauthenticated) olmalı
+        check_a = self.client.get("/api/identity", headers={"X-Session-ID": "sess_logout_a"})
+        self.assertFalse(check_a.json()["authenticated"])
+
+        # B oturumu ise aktif kalmaya devam etmeli
+        check_b = self.client.get("/api/identity", headers={"X-Session-ID": "sess_logout_b"})
+        self.assertTrue(check_b.json()["authenticated"])
+        self.assertEqual(check_b.json()["user"]["isim"], "User B")
+
+    def test_external_inputs_isolation(self):
+        # Kullanıcı X özel embedding girdileri yollar
+        self.client.post("/api/external-input", json={
+            "session_id": "sess_input_x",
+            "items_1": ["Örnek X1"],
+            "items_2": ["Örnek X2"],
+            "model": "ozel-model-x"
+        }, headers={"X-Session-ID": "sess_input_x"})
+
+        # Kullanıcı Y external inputlarını sorguladığında Kullanıcı X'in verisini görmemeli
+        get_y = self.client.get("/api/external-input", headers={"X-Session-ID": "sess_input_y"})
+        self.assertEqual(get_y.status_code, 200)
+        self.assertEqual(get_y.json().get("external_inputs", {}), {})
+
+        # Kullanıcı X ise kendi girdisini görmeli
+        get_x = self.client.get("/api/external-input", headers={"X-Session-ID": "sess_input_x"})
+        self.assertEqual(get_x.status_code, 200)
+        self.assertIn("items_1", get_x.json().get("external_inputs", {}))
 
 
 if __name__ == "__main__":
