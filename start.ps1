@@ -31,7 +31,7 @@ if ($LASTEXITCODE -ne 0) {
 # 2. Seçenek Menüsü
 Write-Host "`nLütfen çalıştırmak istediğiniz modu seçin:" -ForegroundColor Green
 Write-Host " [1] stdio Modu    (Aynı PC'deki LLM / Claude Desktop / Cursor)"
-Write-Host " [2] SSE/HTTP Modu (Intranet ağı üzerinden erişim: http://0.0.0.0:8000/sse)"
+Write-Host " [2] HTTP Modu     (Intranet ağı üzerinden erişim: .env APP_PORT / 9000)"
 Write-Host " [3] Canlı Demo    (example_usage.py ile analiz)"
 Write-Host " [4] Testleri Koş  (test_app.py ile birim testleri)"
 Write-Host " [5] Çıkış"
@@ -44,8 +44,8 @@ switch ($secim) {
         & $PYTHON_CMD app.py --transport stdio
     }
     "2" {
-        Write-Host "`n[MCP Sunucusu] SSE/HTTP modunda dinleniyor: http://0.0.0.0:8000/sse" -ForegroundColor Cyan
-        & $PYTHON_CMD app.py --transport sse --host 0.0.0.0 --port 8000
+        Write-Host "`n[HTTP Sunucusu] .env yapılandırması ile dinleniyor..." -ForegroundColor Cyan
+        & $PYTHON_CMD app.py --transport http
     }
     "3" {
         & $PYTHON_CMD example_usage.py

@@ -23,7 +23,7 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-echo [*] Sunucu http://0.0.0.0:8000 adresinde baslatiliyor...
-echo [*] Agdaki tum cihazlardan http://<SANAL_PC_IP>:8000/docs adresine erisebilirsiniz.
-"%PYTHON_CMD%" app.py --transport http --host 0.0.0.0 --port 8000
+echo [*] Sunucu .env yapilandirmasi ile baslatiliyor...
+echo [*] Agdaki tum cihazlardan http://^<SANAL_PC_IP^>:^<PORT^>/docs adresine erisebilirsiniz.
+"%PYTHON_CMD%" app.py --transport http
 pause

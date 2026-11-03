@@ -46,7 +46,7 @@ if "%1"=="--demo" goto cli_demo
 echo -------------------------------------------------------------------------------
 echo  Lutfen calistirmak istediginiz modu secin:
 echo -------------------------------------------------------------------------------
-echo  [1] Agdaki Herkese Acik Baslat (http://0.0.0.0:8000 - ONERILEN)
+echo  [1] Agdaki Herkese Acik Baslat (.env APP_PORT / 9000 - ONERILEN)
 echo  [2] stdio Modu    (Ayni sanal PC'deki LLM istemcileri / Claude Desktop / Cursor)
 echo  [3] Hizli Demo    (example_usage.py ile gercek veri analizini calistir)
 echo  [4] Testleri Kos  (test_app.py ile birim testlerini calistir)
@@ -79,11 +79,10 @@ exit /b %ERRORLEVEL%
 echo.
 echo ===============================================================================
 echo [WEB SERVISI] Agdaki Herkese Acik Olarak Baslatiliyor...
-echo Adres: http://0.0.0.0:8000
-echo Tarayicidan veya baska PC'den erisim: http://^<SANAL_PC_IP^>:8000/docs
+echo Tarayicidan veya baska PC'den erisim: http://^<SANAL_PC_IP^>:^<PORT^>/docs (.env APP_PORT)
 echo Durdurmak icin CTRL+C tuslarina basin.
 echo ===============================================================================
-"%PYTHON_CMD%" app.py --transport http --host 0.0.0.0 --port 8000
+"%PYTHON_CMD%" app.py --transport http
 pause
 exit /b 0
 
